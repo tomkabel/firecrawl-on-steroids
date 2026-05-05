@@ -42,6 +42,28 @@ const DEPRECATIONS = {
   v1_llmstxt_status: {
     message: "/v1/llmstxt/:jobId is deprecated and will not be replaced.",
   },
+  v0_scrape: {
+    message: "/v0/scrape is deprecated. Use /v2/scrape instead.",
+    replacement: "/v2/scrape",
+  },
+  v0_crawl: {
+    message: "/v0/crawl is deprecated. Use /v2/crawl instead.",
+    replacement: "/v2/crawl",
+  },
+  v0_crawl_status: {
+    message:
+      "/v0/crawl/status/:jobId is deprecated. Use /v2/crawl/:jobId instead.",
+    replacement: "/v2/crawl/:jobId",
+  },
+  v0_crawl_cancel: {
+    message:
+      "/v0/crawl/cancel/:jobId is deprecated. Use DELETE /v2/crawl/:jobId instead.",
+    replacement: "/v2/crawl/:jobId",
+  },
+  v0_search: {
+    message: "/v0/search is deprecated. Use /v2/search instead.",
+    replacement: "/v2/search",
+  },
 } as const satisfies Record<string, Deprecation>;
 
 type DeprecationKey = keyof typeof DEPRECATIONS;
