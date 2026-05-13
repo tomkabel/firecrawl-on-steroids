@@ -449,6 +449,11 @@ const pdfParserWithOptions = z.strictObject({
   type: z.literal("pdf"),
   mode: pdfModeSchema.optional(),
   maxPages: z.int().positive().finite().max(10000).optional(),
+  // Experimental: route this request through the fire-pdf async pipeline
+  // (POST /jobs + poll) instead of the sync POST /ocr endpoint. Falls back
+  // to sync on any async-path failure, so user-visible behavior is unchanged
+  // beyond latency variance. Underscored to mark as internal/experimental.
+  __firePdfAsync: z.boolean().optional(),
 });
 
 const parsersSchema = z
@@ -491,6 +496,17 @@ export function getPDFMode(parsers?: Parsers): PDFMode {
     }
   }
   return "auto";
+}
+
+export function getFirePdfAsync(parsers?: Parsers): boolean {
+  if (!parsers) return false;
+  for (const parser of parsers) {
+    if (parser === "pdf") return false;
+    if (typeof parser === "object" && parser.type === "pdf") {
+      return parser.__firePdfAsync === true;
+    }
+  }
+  return false;
 }
 
 function transformIframeSelector(selector: string): string {
