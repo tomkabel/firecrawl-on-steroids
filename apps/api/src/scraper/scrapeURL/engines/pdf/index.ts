@@ -33,12 +33,11 @@ import {
 } from "../../../../lib/native-logging";
 import { withSpan, setSpanAttributes } from "../../../../lib/otel-tracer";
 import { scrapePDFWithRunPodMU } from "./runpodMU";
+import { reconcilePageCountWithFirePdf, scrapePDFWithFirePDF } from "./firePDF";
 import {
   isFirePdfAsyncFatalError,
-  reconcilePageCountWithFirePdf,
-  scrapePDFWithFirePDF,
   scrapePDFWithFirePDFAsync,
-} from "./firePDF";
+} from "./firePDFAsync";
 import { scrapePDFWithParsePDF } from "./pdfParse";
 import { captureExceptionWithZdrCheck } from "../../../../services/sentry";
 import { isPdfBuffer, PDF_SNIFF_WINDOW } from "./pdfUtils";
@@ -374,7 +373,8 @@ export async function scrapePDF(meta: Meta): Promise<EngineScrapeResult> {
       const fileSizeBytes = pdfBuffer.length;
       const base64Content = pdfBuffer.toString("base64");
       const firePdfRequestedByAsyncFlag =
-        !!meta.options.enableFirePdfAsync && !!config.FIRE_PDF_BASE_URL;
+        !!meta.options.__experimental_firePdfAsync &&
+        !!config.FIRE_PDF_BASE_URL;
       const useFirePDFAsync =
         firePdfRequestedByAsyncFlag &&
         meta.internalOptions.zeroDataRetention !== true;

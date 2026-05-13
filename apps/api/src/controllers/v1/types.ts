@@ -528,7 +528,7 @@ const baseScrapeOptions = z.strictObject({
   __experimental_omce: z.boolean().prefault(false).optional(),
   __experimental_omceDomain: z.string().optional(),
   __forceFirePDF: z.boolean().prefault(false).optional(),
-  enableFirePdfAsync: z.boolean().prefault(false).optional(),
+  __experimental_firePdfAsync: z.boolean().prefault(false).optional(),
 });
 
 const fire1RefineOpts = {
