@@ -4,52 +4,49 @@
 
 - **`/parse` endpoint** — Upload local files (PDF, DOCX, DOC, ODT, RTF, XLSX, XLS, HTML) up to 50 MB and get back clean, LLM-ready Markdown, JSON, or a summary. Tables and reading order are preserved, with full Zero Data Retention support for enterprise plans. Available in JS, Python, Go, Rust, Java, .NET, PHP, Ruby, and Elixir SDKs.
 - **Lockdown Mode** — Set `lockdown: true` on `/scrape` to serve results exclusively from Firecrawl's index with zero outbound requests and zero data retention by default. Gated outbound paths include HTTP fetches, robots.txt, audio downloads, and media. Available in every SDK, the CLI (`--lockdown`), and MCP.
-- **`question` format** — Added `question` format to the `/scrape` endpoint — pass a natural-language prompt and get a grounded, hallucination-free answer back in `data.question`. Runs on a managed model chain with automatic fallback, prompt-injection isolation, and up to 100x fewer tokens per call.
-- **`highlights` format** — Added `highlights` format to the `/scrape` endpoint, returning the exact sentences, code blocks, and table rows on a page that match your query, with paragraphs, fenced code blocks, and tables reconstructed from the source.
-- **`video` format** — Added `video` format to the `/scrape` endpoint, returning a signed downloadable video URL for supported sites (e.g. YouTube), with cookie forwarding for authenticated downloads and explicit Lockdown gating.
+- **`question` format** — Pass a natural-language prompt to `/scrape` and get a grounded, hallucination-free answer back in `data.question`. Runs on a managed model chain with automatic fallback, prompt-injection isolation via XML tagging and zero-width-space escaping, and up to 100x fewer tokens per call.
+- **`highlights` format** — Returns the exact sentences, code blocks, and table rows on a page that match your query. Consecutive sentences re-join into paragraphs, code lines wrap in fenced blocks with their original language, and table rows rebuild into Markdown tables with headers — all from the source page, in the page's own words.
+- **`video` format** — Added `video` to scrape formats. Returns a signed downloadable video URL for supported sites (e.g. YouTube), with cookie forwarding for authenticated downloads and explicit Lockdown gating.
 - **`/search` domain filters** — Added `includeDomains` and `excludeDomains` parameters to `/search` for scoping results to a specific set of sites.
 - **`/search` feedback endpoint** — Submit a rating on a search result with `POST /v2/search/:jobId/feedback`. Each accepted submission refunds 1 credit, capped per UTC day, with idempotent retries.
-- **Custom robots.txt user agent** — Added `robotsUserAgent` to crawl requests to evaluate robots.txt rules and crawl delays against a custom agent string, with a separate `customRobotsAgent` org flag independent from `ignoreRobots`. Available in JS, Python, and Java SDKs.
+- **Custom robots.txt user agent** — Added `robotsUserAgent` to crawl requests to evaluate robots.txt rules and crawl delays against a custom agent string, and a separate `customRobotsAgent` org flag independent from `ignoreRobots`. Available in JS, Python, and Java SDKs.
 - **Official Go SDK** — Added a first-party Go SDK for the v2 API, replacing the community module. Includes context-aware retry backoff and proper `MapData.Links` typing.
-- **Official Ruby SDK** — Added the official Firecrawl Ruby SDK v2 with full endpoint coverage and v2-native typing.
-- **Official PHP SDK** — Added the official PHP SDK with Laravel support, scrape/search/crawl/map/parse coverage, and a published `firecrawl/firecrawl-sdk` Composer package.
-- **Official .NET SDK** — Added the official .NET SDK with v2 API support, parse, and a published `firecrawl-sdk` NuGet package.
-- **Rust SDK v2** — Promoted the Rust SDK to the official v2 SDK with parity across scrape, search, crawl, map, agent, and parse.
-- **LangSmith tracing for `/interact`** — Browser sessions are now grouped in LangSmith by `session_id` for end-to-end visibility across multi-step interact runs.
-- **`/interact` suggestion on `/scrape`** — Calls to `/scrape` that pass an `actions` array now return a warning suggesting `/interact` for stateful browser automation.
-- **PDF pipeline improvements** — Improved PDF parsing reliability with clearer timeout handling and explicit deadline contracts. Raised the PDF upload size limit from 10 MB to 30 MB.
-- Updated PDF billing to reflect the exact number of pages processed rather than the raw page count.
-- Improved audio scrape reliability by routing through a dedicated engine.
-- Added `HARNESS_STARTUP_TIMEOUT_MS` to `docker-compose` for self-hosted users who need longer startup windows.
-- Added `parse_file/3` to the Elixir SDK for the `/parse` endpoint.
-- Added an explicit request timeout option to the JS SDK to prevent hanging requests.
+- **Ruby SDK** — Added the official Firecrawl Ruby SDK v2 with full endpoint coverage and v2-native typing.
+- **PHP SDK** — Added the official PHP SDK with Laravel support, scrape/search/crawl/map/parse coverage, and a published `firecrawl/firecrawl-sdk` Composer package.
+- **.NET SDK** — Added the official .NET SDK with v2 API support, parse, and an `firecrawl-sdk` NuGet package.
+- **Rust SDK v2** — The Rust SDK has been promoted to the official v2 SDK with parity across scrape, search, crawl, map, agent, and parse.
+- **`/interact` suggestion** — Calls to `/scrape` that pass an `actions` array now return a warning suggesting `/interact` for stateful browser automation.
+- **PDF size cap** — Raised the PDF upload size limit from 10 MB to 30 MB.
+- **PDF page-processed billing** — PDF billing now reflects the exact number of pages processed instead of the raw page count.
+- **Docker harness** — Exposed `HARNESS_STARTUP_TIMEOUT_MS` through `docker-compose` for self-hosted users who need longer startup windows.
+- **Elixir SDK** — Added `parse_file/3` for the `/parse` endpoint with error-tuple return semantics and regenerated bindings from the OpenAPI spec.
+- **JS SDK request timeout** — Added an explicit `axios` timeout option to the JS SDK to prevent hanging requests.
 
 ## Fixes
 
-- Fixed branding `colors.secondary` being incorrectly populated when the LLM omitted a value — `secondary` is now optional and no longer applied as a default.
+- Resolved multiple CVEs across the API and SDKs including `axios`, `postcss`, `fast-xml-parser`, `protobufjs`, `follow-redirects`, `langsmith`, `lodash`, `fast-uri`, and `fast-xml-builder`.
+- Fixed branding `colors.secondary` being incorrectly populated by a JS heuristic when the LLM omitted a value — `secondary` is now optional and is no longer applied as a default.
 - Fixed the Playwright service ignoring the caller's `User-Agent` request header.
-- Fixed `screenshot` signed URLs returning stale cached results after expiration.
-- Fixed Lockdown requests being billed twice for ZDR — Lockdown is now treated as zero data retention by default.
+- Fixed `screenshot` signed URLs returning stale results from cache by forcing a cache miss when the signed URL has expired.
+- Fixed Lockdown requests being billed twice for ZDR by treating Lockdown as zero data retention by default.
 - Fixed proxy billing for cached scrapes incorrectly charging proxy credits when no proxy egress occurred.
-- Fixed YouTube transcript scripts running on audio-only scrapes, and fixed audio downloads not receiving CDP cookies.
+- Fixed YouTube transcript scripts running on audio-only scrapes and audio downloads not receiving CDP cookies.
 - Fixed `html-to-md` conversion service ignoring zero data retention.
 - Fixed a stack overflow in `marked.parse` when handling certain PDF outputs.
 - Fixed `robotsUserAgent` not being honored by the native link filter and not being included in JS SDK crawl payloads.
-- Fixed `/v1` status endpoints returning 500 on non-UUID job IDs — they now return a proper 400.
+- Fixed `/v1` status endpoints returning 500 on non-UUID job IDs — now returns a proper 400.
 - Fixed empty `actions: []` arrays being treated as actions in feature flags.
 - Fixed JS SDK watcher emitting duplicate events, leaking timeouts, and hanging `start()` on watcher timeouts.
 - Fixed Ruby SDK unwrapping of `credit_usage` data fields and defaulted `skipTlsVerification` to `false`.
 - Fixed missing negative-limit validation in Python, Java, and Go SDKs.
 - Fixed Java SDK accepting empty API keys and missing async lifecycle methods.
 - Fixed billing period timestamps, subscription lookups, and plan credit reporting.
-- Fixed crawl-backlog timeouts being unbounded — they are now capped at 48 hours.
-- Resolved security advisories in multiple dependencies including `axios`, `postcss`, `fast-xml-parser`, `protobufjs`, `follow-redirects`, `langsmith`, `lodash`, `fast-uri`, and `fast-xml-builder`.
-- Patched a `define:vars` XSS advisory by upgrading `astro` 5 → 6 in `test-site`.
+- Fixed crawl-backlog timeouts being unbounded — now capped at 48h.
 
 ## API
 
 - Added `POST /v2/parse` for multipart file uploads up to 50 MB. Returns a standard Document. Disallowed scrape options on parse: `changeTracking`, `screenshot`, `branding`, `actions`, `waitFor`, `location`, `mobile`; `proxy` is restricted to `auto` or `basic`. Errors with `PARSE_UNSUPPORTED_OPTIONS` on disallowed input.
-- Added `lockdown: boolean` to `/scrape`. Cache misses return `404` with `SCRAPE_LOCKDOWN_CACHE_MISS`. Billing: +4 credits when `lockdown` is enabled, 1 credit on cache miss.
+- Added `lockdown: boolean` to `/scrape`. Cache misses return `404` with `SCRAPE_LOCKDOWN_CACHE_MISS`. Billing: +4 credits when `lockdown` is enabled, 1 credit on cache miss. Available across all SDKs.
 - Added `question` and `highlights` to `/scrape` formats, returning `data.question` and `data.highlights` respectively.
 - Added `video` to `/scrape` formats. Returns `document.video` as a signed URL. +4 credits per request. Unsupported URLs raise `SCRAPE_VIDEO_UNSUPPORTED_URL`; `parse` rejects the `video` format client- and server-side.
 - Added `includeDomains` and `excludeDomains` arrays on `/v2/search` for scoping results to specific domains.
@@ -60,29 +57,6 @@
 - Added `/v2/monitor` endpoints for creating, listing, manually running, and reading page-change monitors with paginated diff history and webhook/email notifications.
 - Deprecated `/v0/scrape`, `/v0/crawl`, `/v0/crawl/status/:jobId`, `DELETE /v0/crawl/cancel/:jobId`, `/v0/search`, `/v1/extract`, `/v1/extract/:jobId`, `/v2/extract`, `/v2/extract/:jobId`, `/v1/deep-research`, `/v1/deep-research/:jobId`, `/v1/llmstxt`, and `/v1/llmstxt/:jobId`. Deprecated endpoints emit `Deprecation: true`, `Warning: 299 - "<message>"`, `Link; rel="successor-version"`, and (when configured) `Sunset` headers, plus `warnings[]` and `replacement` in the JSON body. JS and Python SDKs surface these to clients.
 - Removed the legacy `ignoreRobots: boolean` request shape — clients must use the new flag values.
-
----
-
-## New Contributors
-
-* @JesterCharles made their first contribution in https://github.com/firecrawl/firecrawl/pull/3447
-* @voidborne-d made their first contribution in https://github.com/firecrawl/firecrawl/pull/3387
-
-## Contributors
-
-* @nickscamara
-* @mogery
-* @abimaelmartell
-* @ericciarla
-* @rafaelsideguide
-* @Chadha93
-* @tomsideguide
-* @developersdigest
-* @micahstairs
-* @firecrawl-spring
-* @devin-ai-integration
-* @JesterCharles
-* @voidborne-d
 
 ---
 
