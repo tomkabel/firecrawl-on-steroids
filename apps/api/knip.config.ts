@@ -19,12 +19,8 @@ const config: KnipConfig = {
     "src/services/billing/auto_charge.ts",
     "src/services/billing/issue_credits.ts",
     "src/services/billing/stripe.ts",
-    "src/controllers/v2/search-feedback.ts",
-    "src/lib/parseApi.ts",
-    "src/services/agent-sponsor.ts",
-    "src/scraper/scrapeURL/engines/pdf/fire-pdf/**",
   ],
-  ignoreDependencies: ["undici-types", "stripe", "qs", "@types/qs"],
+  ignoreDependencies: ["undici-types", "stripe"],
 };
 
 export default config;
