@@ -26,10 +26,9 @@ function derivePricingTier(
 
   const credits = acuc.price_credits ?? 0;
   if (credits <= 500) return "free";
-  if (credits <= 3_000) return "hobby";
-  if (credits <= 10_000) return "starter";
-  if (credits <= 100_000) return "standard";
-  if (credits <= 500_000) return "growth";
+  if (credits <= 8_000) return "hobby";
+  if (credits <= 160_000) return "standard";
+  if (credits <= 650_000) return "growth";
   return "scale";
 }
 
@@ -40,7 +39,6 @@ function deriveMrrBand(acuc: AuthCreditUsageChunk | null | undefined): string {
       return "$0";
     case "hobby":
       return "$0-100";
-    case "starter":
     case "standard":
       return "$100-500";
     case "growth":
