@@ -29,6 +29,8 @@ type MonitorPageDiffResult = {
   diffTextBytes: number | null;
   diffJsonBytes: number | null;
   judgment?: Judgment;
+  diffText?: string;
+  diffJson?: Record<string, { previous: unknown; current: unknown }>;
 };
 
 type PreviousPageRef = {
@@ -156,8 +158,7 @@ export async function computeAndPersistPageDiff(params: {
       ? await runJudge({
           goal,
           extractionPrompt,
-          jsonDiff:
-            result.status === "changed" ? result.json : undefined,
+          jsonDiff: result.status === "changed" ? result.json : undefined,
           markdownDiff: markdownSidecar
             ? {
                 previous: previousDoc?.markdown ?? "",
@@ -173,6 +174,8 @@ export async function computeAndPersistPageDiff(params: {
       diffTextBytes: sizes.textBytes,
       diffJsonBytes: sizes.jsonBytes,
       ...(judgment ? { judgment } : {}),
+      ...(result.status === "changed" ? { diffJson: result.json } : {}),
+      ...(markdownSidecar ? { diffText: markdownSidecar.text } : {}),
     };
   }
 
@@ -236,6 +239,7 @@ export async function computeAndPersistPageDiff(params: {
     diffTextBytes: sizes.textBytes,
     diffJsonBytes: sizes.jsonBytes,
     ...(judgment ? { judgment } : {}),
+    diffText: diff.text,
   };
 }
 

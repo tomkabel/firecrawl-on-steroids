@@ -31,7 +31,6 @@ interface PageJudgment {
   fields: string[];
 }
 
-
 async function sendMonitorPageWebhook(params: {
   teamId: string;
   monitorId: string;
@@ -42,6 +41,8 @@ async function sendMonitorPageWebhook(params: {
   currentScrapeId?: string | null;
   error?: string | null;
   judgment?: PageJudgment | null;
+  diffText?: string | null;
+  diffJson?: Record<string, { previous: unknown; current: unknown }> | null;
 }) {
   try {
     const monitor = await getMonitorForUpdate(params.teamId, params.monitorId);
@@ -58,6 +59,13 @@ async function sendMonitorPageWebhook(params: {
       params.status,
       params.judgment ?? null,
     );
+    const diff =
+      params.diffText || params.diffJson
+        ? {
+            ...(params.diffText ? { text: params.diffText } : {}),
+            ...(params.diffJson ? { json: params.diffJson } : {}),
+          }
+        : null;
     const payload = {
       success: params.status !== "error",
       data: {
@@ -69,6 +77,7 @@ async function sendMonitorPageWebhook(params: {
         currentScrapeId: params.currentScrapeId ?? null,
         error: params.error ?? null,
         judgment: params.judgment ?? null,
+        diff,
       },
       error: params.error ?? undefined,
     };
@@ -85,7 +94,6 @@ async function sendMonitorPageWebhook(params: {
     });
   }
 }
-
 
 export async function recordMonitorScrapeSuccess(
   job: NuQJob<ScrapeJobData>,
@@ -114,27 +122,34 @@ export async function recordMonitorScrapeSuccess(
   const targetCtFormat = Array.isArray(targetFormats)
     ? (targetFormats as any[]).find((f: any) => f?.type === "changeTracking")
     : undefined;
-  const { status, diffGcsKey, diffTextBytes, diffJsonBytes, judgment } =
-    await computeAndPersistPageDiff({
-      teamId: job.data.team_id,
-      monitorId: monitoring.monitorId,
-      checkId: monitoring.checkId,
-      url,
-      scrapeId: job.id,
-      doc,
-      previous: previous
-        ? {
-            last_scrape_id: previous.last_scrape_id,
-            is_removed: previous.is_removed,
-          }
+  const {
+    status,
+    diffGcsKey,
+    diffTextBytes,
+    diffJsonBytes,
+    judgment,
+    diffText,
+    diffJson,
+  } = await computeAndPersistPageDiff({
+    teamId: job.data.team_id,
+    monitorId: monitoring.monitorId,
+    checkId: monitoring.checkId,
+    url,
+    scrapeId: job.id,
+    doc,
+    previous: previous
+      ? {
+          last_scrape_id: previous.last_scrape_id,
+          is_removed: previous.is_removed,
+        }
+      : null,
+    formats: targetFormats,
+    goal:
+      monitorForRun?.judge_enabled && monitorForRun?.goal
+        ? monitorForRun.goal
         : null,
-      formats: targetFormats,
-      goal:
-        monitorForRun?.judge_enabled && monitorForRun?.goal
-          ? monitorForRun.goal
-          : null,
-      extractionPrompt: targetCtFormat?.prompt ?? null,
-    });
+    extractionPrompt: targetCtFormat?.prompt ?? null,
+  });
 
   await upsertMonitorPage({
     monitorId: monitoring.monitorId,
@@ -196,6 +211,8 @@ export async function recordMonitorScrapeSuccess(
     previousScrapeId: previous?.last_scrape_id ?? null,
     currentScrapeId: job.id,
     judgment: judgment ?? null,
+    diffText: diffText ?? null,
+    diffJson: diffJson ?? null,
   });
 }
 
