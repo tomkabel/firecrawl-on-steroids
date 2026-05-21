@@ -2,6 +2,7 @@ import { v7 as uuidv7 } from "uuid";
 import { config } from "../../config";
 import { logger as _logger } from "../../lib/logger";
 import { logRequest } from "../logging/log_job";
+import { getMonitorDiffArtifact } from "../../lib/gcs-monitoring";
 import { processJobInternal } from "../worker/scrape-worker";
 import { NuQJob, crawlGroup, scrapeQueue } from "../worker/nuq";
 import { ScrapeJobData } from "../../types";
@@ -611,17 +612,45 @@ async function sendNotifications(params: {
     }
   }
 
+  const nonSamePages = params.pages.filter(page => page.status !== "same");
+  // Pull the unified-diff text for up to 5 meaningful changed pages so the
+  // email leads with the actual diff. Cheap GCS reads, parallelised. Errors
+  // are swallowed per-page so a single GCS hiccup doesn't drop the alert.
+  const diffEligible = nonSamePages
+    .filter(
+      p => p.status === "changed" && (!p.judgment || p.judgment.meaningful),
+    )
+    .slice(0, 5);
+  const diffTextByUrl = new Map<string, string>();
+  await Promise.all(
+    diffEligible.map(async page => {
+      if (!page.diff_gcs_key) return;
+      try {
+        const artifact = await getMonitorDiffArtifact(page.diff_gcs_key);
+        const text =
+          artifact?.kind === "markdown"
+            ? artifact.text
+            : artifact?.markdown?.text;
+        if (text) diffTextByUrl.set(page.url, text);
+      } catch (error) {
+        logger.warn("Failed to load diff artifact for email", {
+          error,
+          url: page.url,
+        });
+      }
+    }),
+  );
+
   const emailStatus = await sendMonitoringEmailSummary({
     monitor: params.monitor,
     check: params.check,
-    pages: params.pages
-      .filter(page => page.status !== "same")
-      .map(page => ({
-        url: page.url,
-        status: page.status,
-        error: page.error,
-        judgment: page.judgment ?? null,
-      })),
+    pages: nonSamePages.map(page => ({
+      url: page.url,
+      status: page.status,
+      error: page.error,
+      judgment: page.judgment ?? null,
+      diffText: diffTextByUrl.get(page.url) ?? null,
+    })),
   });
 
   return {

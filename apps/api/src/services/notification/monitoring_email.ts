@@ -17,7 +17,36 @@ type MonitoringEmailPage = {
     reason: string;
     fields: string[];
   } | null;
+  diffText?: string | null;
 };
+
+const DIFF_MAX_LINES_PER_PAGE = 24;
+const DIFF_MAX_CHARS_PER_LINE = 200;
+
+function renderDiffBlock(diffText: string): string {
+  const lines = diffText.split("\n");
+  const truncated = lines.length > DIFF_MAX_LINES_PER_PAGE;
+  const shown = lines.slice(0, DIFF_MAX_LINES_PER_PAGE).map(rawLine => {
+    const clipped =
+      rawLine.length > DIFF_MAX_CHARS_PER_LINE
+        ? rawLine.slice(0, DIFF_MAX_CHARS_PER_LINE) + "…"
+        : rawLine;
+    const safe = escapeHtml(clipped);
+    let color = "#374151";
+    let bg = "transparent";
+    if (clipped.startsWith("+") && !clipped.startsWith("+++")) {
+      color = "#166534";
+      bg = "#dcfce7";
+    } else if (clipped.startsWith("-") && !clipped.startsWith("---")) {
+      color = "#991b1b";
+      bg = "#fee2e2";
+    } else if (clipped.startsWith("@@")) {
+      color = "#6b21a8";
+    }
+    return `<div style="color:${color};background:${bg};padding:0 6px;">${safe || "&nbsp;"}</div>`;
+  });
+  return `<pre style="margin:8px 0 0;padding:10px;background:#f9fafb;border:1px solid #e5e7eb;border-radius:6px;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;font-size:12px;line-height:1.5;white-space:pre;overflow-x:auto;">${shown.join("")}${truncated ? `<div style="color:#6b7280;padding:6px 6px 0;">… ${lines.length - DIFF_MAX_LINES_PER_PAGE} more lines</div>` : ""}</pre>`;
+}
 
 export type MonitoringEmailPayload = {
   monitorId: string;
@@ -105,9 +134,13 @@ export function buildHtml(payload: MonitoringEmailPayload): string {
         }
         reason = `<br/><small style="color:#6b7280">${escapeHtml(page.judgment.reason)}</small>`;
       }
-      return `<li><strong>${escapeHtml(page.status)}</strong>${badge}: <a href="${url}">${url}</a>${
+      const diffBlock =
+        page.diffText && page.diffText.trim().length > 0
+          ? renderDiffBlock(page.diffText)
+          : "";
+      return `<li style="margin:0 0 14px;"><strong>${escapeHtml(page.status)}</strong>${badge}: <a href="${url}">${url}</a>${
         page.error ? ` &mdash; ${escapeHtml(page.error)}` : ""
-      }${reason}</li>`;
+      }${reason}${diffBlock}</li>`;
     })
     .join("");
   const dashboardUrl = escapeHtml(payload.dashboardUrl);
