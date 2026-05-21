@@ -1,0 +1,20 @@
+---
+title: "v2.11.0 is live"
+date: "May 22, 2026"
+description: "Firecrawl v2.11.0 adds JSON-mode diffs and snapshots to the Monitor API, ships fixes for crawl cancel, Python search filters, and CVE patches, and updates X/Twitter billing."
+---
+
+## v2.11.0 is live
+
+Firecrawl v2.11.0 extends the Monitor API with JSON-mode diffs and snapshots across every official SDK, drains the concurrency backlog on crawl/batch cancel, fixes the Python sync `search()` signature, patches `ws` and `brace-expansion` CVEs, and updates X/Twitter scrape billing.
+
+### Highlights
+
+- **Monitor JSON diffs** — Monitors using `{type: "json"}` or `{type: "changeTracking", modes: ["json"]}` now diff structured fields against the previous run and persist a `snapshot.json` of current values, surfaced through `GET /v2/monitor/:id/checks/:checkId` and typed in JS, Python, Java, .NET, Go, PHP, Ruby, and Rust.
+- **Mixed-mode change tracking** — Requesting both `["json", "git-diff"]` modes now runs both diffs and reports `changed` if either side changes, with the markdown unified diff attached as a sidecar on the JSON artifact.
+- **Concurrency backlog drained on cancel** — Canceling a v1/v2 crawl or batch now removes queued job IDs from the per-team concurrency-limit queue and reports `cancelled` status immediately, instead of leaving stuck backlog behind.
+- **Python SDK sync search filters** — Sync `Firecrawl.search()` now accepts `include_domains` and `exclude_domains`, matching `AsyncFirecrawl.search()` and the `/v2/search` wire payload.
+- **CVE patches** — Bumped `ws` to `8.20.1` and the `brace-expansion` override to `5.0.6` across the API, JS SDK, test-suite, and ingestion UI to clear GHSA-58qx-3vcg-4xpx and GHSA-jxxr-4gwj-5jf2.
+- **X/Twitter scrape billing** — Updated X/Twitter scrape billing to 29 credits per request to reflect provider costs.
+
+Read the full changelog [here](https://github.com/firecrawl/firecrawl/releases/tag/v2.11.0).
