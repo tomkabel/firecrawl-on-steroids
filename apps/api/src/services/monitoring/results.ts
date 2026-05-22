@@ -4,7 +4,7 @@ import { logger as _logger } from "../../lib/logger";
 import { createWebhookSender, WebhookEvent } from "../webhook";
 import { billTeam } from "../billing/credit_billing";
 import { computeAndPersistPageDiff } from "./diff-orchestrator";
-import { derivePageWebhookEvents } from "./page-events";
+import { derivePageIsMeaningful } from "./page-events";
 import {
   getMonitorForUpdate,
   getMonitorPage,
@@ -58,7 +58,7 @@ async function sendMonitorPageWebhook(params: {
       v0: false,
     });
 
-    const eventNames = derivePageWebhookEvents(
+    const isMeaningful = derivePageIsMeaningful(
       params.status,
       params.judgment ?? null,
     );
@@ -80,6 +80,7 @@ async function sendMonitorPageWebhook(params: {
           previousScrapeId: params.previousScrapeId ?? null,
           currentScrapeId: params.currentScrapeId ?? null,
           error: params.error ?? null,
+          isMeaningful,
           judgment: params.judgment ?? null,
           diff,
         },
@@ -87,7 +88,7 @@ async function sendMonitorPageWebhook(params: {
       error: params.error ?? undefined,
     };
     if (sender) {
-      await Promise.all(eventNames.map(name => sender.send(name, payload)));
+      await sender.send(WebhookEvent.MONITOR_PAGE, payload);
     }
   } catch (error) {
     logger.warn("Failed to send monitor page webhook", {

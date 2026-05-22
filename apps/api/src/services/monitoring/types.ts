@@ -41,7 +41,6 @@ const monitorTargetSchema = z.union([scrapeTargetSchema, crawlTargetSchema]);
 const monitorWebhookSchema = createWebhookSchema([
   "monitor.page",
   "monitor.check.completed",
-  "monitor.page.meaningful",
 ]);
 
 const monitorScheduleSchema = z

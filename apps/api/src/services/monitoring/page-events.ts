@@ -1,16 +1,13 @@
-import { WebhookEvent } from "../webhook/types";
-
 interface PageJudgmentForEvents {
   meaningful: boolean;
 }
 
-export function derivePageWebhookEvents(
+// Derives the `isMeaningful` payload flag for a `monitor.page` webhook.
+// null when the judge didn't run (no goal, no change, etc); otherwise the verdict.
+export function derivePageIsMeaningful(
   status: string,
   judgment: PageJudgmentForEvents | null,
-): WebhookEvent[] {
-  const events: WebhookEvent[] = [WebhookEvent.MONITOR_PAGE];
-  if (status === "changed" && judgment?.meaningful === true) {
-    events.push(WebhookEvent.MONITOR_PAGE_MEANINGFUL);
-  }
-  return events;
+): boolean | null {
+  if (status !== "changed" || !judgment) return null;
+  return judgment.meaningful;
 }

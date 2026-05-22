@@ -14,7 +14,6 @@ export enum WebhookEvent {
   EXTRACT_COMPLETED = "extract.completed",
   EXTRACT_FAILED = "extract.failed",
   MONITOR_PAGE = "monitor.page",
-  MONITOR_PAGE_MEANINGFUL = "monitor.page.meaningful",
   MONITOR_CHECK_COMPLETED = "monitor.check.completed",
 }
 
@@ -29,7 +28,6 @@ export type WebhookEventDataMap = {
   [WebhookEvent.EXTRACT_COMPLETED]: ExtractCompletedData;
   [WebhookEvent.EXTRACT_FAILED]: ExtractFailedData;
   [WebhookEvent.MONITOR_PAGE]: MonitorPageData;
-  [WebhookEvent.MONITOR_PAGE_MEANINGFUL]: MonitorPageData;
   [WebhookEvent.MONITOR_CHECK_COMPLETED]: MonitorCheckCompletedData;
 };
 
@@ -143,6 +141,7 @@ interface MonitorPageData extends BaseWebhookData {
     previousScrapeId?: string | null;
     currentScrapeId?: string | null;
     error?: string | null;
+    isMeaningful: boolean | null;
     judgment?: MonitorPageJudgment | null;
     diff?: MonitorPageDiff | null;
   }[];

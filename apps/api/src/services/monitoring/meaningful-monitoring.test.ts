@@ -18,7 +18,7 @@ jest.mock("../../lib/gcs-monitoring", () => ({
 }));
 
 import { computeAndPersistPageDiff } from "./diff-orchestrator";
-import { derivePageWebhookEvents } from "./page-events";
+import { derivePageIsMeaningful } from "./page-events";
 
 const FAKE_JUDGMENT = {
   meaningful: true as const,
@@ -118,20 +118,15 @@ describe("computeAndPersistPageDiff — judge gating", () => {
   });
 });
 
-describe("derivePageWebhookEvents", () => {
-  it("always emits monitor.page; gates monitor.page.meaningful on changed+meaningful", () => {
-    expect(derivePageWebhookEvents("changed", { meaningful: true })).toEqual([
-      "monitor.page",
-      "monitor.page.meaningful",
-    ]);
-    expect(derivePageWebhookEvents("changed", { meaningful: false })).toEqual([
-      "monitor.page",
-    ]);
-    expect(derivePageWebhookEvents("changed", null)).toEqual(["monitor.page"]);
+describe("derivePageIsMeaningful", () => {
+  it("returns the judge verdict only for changed pages; null otherwise", () => {
+    expect(derivePageIsMeaningful("changed", { meaningful: true })).toBe(true);
+    expect(derivePageIsMeaningful("changed", { meaningful: false })).toBe(
+      false,
+    );
+    expect(derivePageIsMeaningful("changed", null)).toBeNull();
     for (const status of ["new", "same", "removed", "error"]) {
-      expect(derivePageWebhookEvents(status, { meaningful: true })).toEqual([
-        "monitor.page",
-      ]);
+      expect(derivePageIsMeaningful(status, { meaningful: true })).toBeNull();
     }
   });
 });
