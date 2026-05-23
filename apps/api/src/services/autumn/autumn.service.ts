@@ -590,34 +590,35 @@ export class AutumnService {
     string,
     { value: number | null; expiresAt: number }
   >(50_000);
-  private orgTeamCountCache = new BoundedMap<
+  private orgMultiTeamCache = new BoundedMap<
     string,
-    { count: number; expiresAt: number }
+    { canHaveMultiple: boolean; expiresAt: number }
   >(50_000);
   private static readonly CONCURRENCY_LIMIT_TTL_MS = 60_000;
-  private static readonly ORG_TEAM_COUNT_TTL_MS = 300_000;
+  private static readonly ORG_MULTI_TEAM_TTL_MS = 300_000;
 
   /**
-   * Counts how many teams belong to an org, with a 5-minute cache. Used to
-   * gate Autumn-side concurrency lookups — multi-team orgs share an Autumn
-   * customer/balance, so per-team concurrency from Autumn isn't meaningful
-   * there yet and we should defer to ACUC.
+   * Reads `organizations.can_have_multiple_teams`, with a 5-minute cache.
+   * Used to gate Autumn-side concurrency lookups — multi-team orgs share an
+   * Autumn customer/balance, so per-team concurrency from Autumn isn't
+   * meaningful there yet and we should defer to ACUC.
    */
-  private async getOrgTeamCount(orgId: string): Promise<number> {
+  private async orgCanHaveMultipleTeams(orgId: string): Promise<boolean> {
     const now = Date.now();
-    const cached = this.orgTeamCountCache.get(orgId);
-    if (cached && cached.expiresAt > now) return cached.count;
+    const cached = this.orgMultiTeamCache.get(orgId);
+    if (cached && cached.expiresAt > now) return cached.canHaveMultiple;
 
-    const { count, error } = await supabase_rr_service
-      .from("teams")
-      .select("id", { count: "exact", head: true })
-      .eq("org_id", orgId);
+    const { data, error } = await supabase_rr_service
+      .from("organizations")
+      .select("can_have_multiple_teams")
+      .eq("id", orgId)
+      .single();
     if (error) throw error;
 
-    const value = count ?? 0;
-    this.orgTeamCountCache.set(orgId, {
-      count: value,
-      expiresAt: now + AutumnService.ORG_TEAM_COUNT_TTL_MS,
+    const value = data?.can_have_multiple_teams === true;
+    this.orgMultiTeamCache.set(orgId, {
+      canHaveMultiple: value,
+      expiresAt: now + AutumnService.ORG_MULTI_TEAM_TTL_MS,
     });
     return value;
   }
@@ -643,8 +644,7 @@ export class AutumnService {
 
       // Skip Autumn for multi-team orgs — the customer-level balance is
       // shared across teams and ACUC remains authoritative there.
-      const teamCount = await this.getOrgTeamCount(resolvedOrgId);
-      if (teamCount > 1) {
+      if (await this.orgCanHaveMultipleTeams(resolvedOrgId)) {
         this.concurrencyLimitCache.set(teamId, {
           value: null,
           expiresAt: now + AutumnService.CONCURRENCY_LIMIT_TTL_MS,
