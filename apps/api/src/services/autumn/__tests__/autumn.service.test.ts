@@ -101,22 +101,6 @@ function makeEntity(usage: number) {
   return { balances: { CREDITS: { usage } } };
 }
 
-function setAutumnConfig(
-  overrides: {
-    AUTUMN_EXPERIMENT?: string;
-    AUTUMN_EXPERIMENT_PERCENT?: number;
-    AUTUMN_REQUEST_TRACK_EXPERIMENT?: string;
-    AUTUMN_REQUEST_TRACK_EXPERIMENT_PERCENT?: number;
-  } = {},
-) {
-  config.AUTUMN_EXPERIMENT = overrides.AUTUMN_EXPERIMENT ?? "true";
-  config.AUTUMN_EXPERIMENT_PERCENT = overrides.AUTUMN_EXPERIMENT_PERCENT ?? 100;
-  config.AUTUMN_REQUEST_TRACK_EXPERIMENT =
-    overrides.AUTUMN_REQUEST_TRACK_EXPERIMENT;
-  config.AUTUMN_REQUEST_TRACK_EXPERIMENT_PERCENT =
-    overrides.AUTUMN_REQUEST_TRACK_EXPERIMENT_PERCENT ?? 100;
-}
-
 // ---------------------------------------------------------------------------
 // Test setup
 // ---------------------------------------------------------------------------
@@ -125,7 +109,10 @@ beforeEach(() => {
   jest.clearAllMocks();
   autumnClientRef = mockAutumnClient;
   supabaseStubData = { data: { org_id: "org-1" }, error: null };
-  setAutumnConfig();
+  config.AUTUMN_EXPERIMENT = "true";
+  config.AUTUMN_EXPERIMENT_PERCENT = 100;
+  config.AUTUMN_REQUEST_TRACK_EXPERIMENT = undefined;
+  config.AUTUMN_REQUEST_TRACK_EXPERIMENT_PERCENT = 100;
   mockCheck.mockResolvedValue({
     allowed: true,
     customerId: "org-1",
@@ -557,10 +544,6 @@ describe("orgBucket", () => {
 });
 
 describe("isAutumnEnabled", () => {
-  afterEach(() => {
-    setAutumnConfig();
-  });
-
   it("returns true when experiment is enabled and percent is 100", () => {
     expect(isAutumnEnabled()).toBe(true);
   });
@@ -590,25 +573,14 @@ describe("isAutumnEnabled", () => {
 });
 
 describe("isAutumnCheckEnabled", () => {
-  afterEach(() => {
-    setAutumnConfig();
-  });
-
-  it("returns true when the Autumn experiment is enabled", () => {
+  it("mirrors AUTUMN_EXPERIMENT", () => {
     expect(isAutumnCheckEnabled()).toBe(true);
-  });
-
-  it("returns false when the Autumn experiment is disabled", () => {
     config.AUTUMN_EXPERIMENT = undefined;
     expect(isAutumnCheckEnabled()).toBe(false);
   });
 });
 
 describe("isAutumnRequestTrackEnabled", () => {
-  afterEach(() => {
-    setAutumnConfig({ AUTUMN_REQUEST_TRACK_EXPERIMENT: undefined });
-  });
-
   it("returns false when request tracking flag is not 'true'", () => {
     expect(isAutumnRequestTrackEnabled()).toBe(false);
   });
@@ -620,10 +592,6 @@ describe("isAutumnRequestTrackEnabled", () => {
 });
 
 describe("experiment gate on lockCredits", () => {
-  afterEach(() => {
-    setAutumnConfig();
-  });
-
   it("lockCredits returns null when experiment is disabled", async () => {
     config.AUTUMN_EXPERIMENT = undefined;
     const svc = makeService();
