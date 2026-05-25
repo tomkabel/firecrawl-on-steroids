@@ -65,7 +65,6 @@ export function isAutumnEnabled(orgId?: string): boolean {
 
 export function isAutumnCheckEnabled(orgId?: string): boolean {
   if (orgId && AUTUMN_BYPASS_ORG_IDS.has(orgId)) return true;
-  if (config.AUTUMN_CHECK_ENABLED !== "true") return false;
   if (config.AUTUMN_EXPERIMENT !== "true") return false;
   const percent = config.AUTUMN_CHECK_EXPERIMENT_PERCENT ?? 100;
   if (!orgId || percent >= 100) return true;
