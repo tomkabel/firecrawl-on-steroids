@@ -61,3 +61,24 @@ _local/
 
 
 apps/api/src/lib/scrape-interact/*.md
+
+# External tooling repos (cloned for evaluation)
+/chaser-oxide/
+/chromiumoxide/
+/nodriver/
+/obscura/
+/stealth-browser-mcp/
+/firecrawl-cli/cli/
+
+# CommandCode agent tooling
+.commandcode/
+
+# Local temp database
+mydatabase.db
+
+# MCP config with credentials
+firecrawl-mcp-selfhosted.json
+
+# Scraped/cached external documentation
+docs-firecrawl.md
+katana.md
