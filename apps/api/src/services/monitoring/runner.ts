@@ -940,7 +940,14 @@ export async function processMonitorCheckJob(
       error: error instanceof Error ? error.message : String(error),
     });
 
-    if (await claimMonitorNotification(check.id)) {
+    if ((await claimMonitorNotification(check.id).catch(error => {
+      logger.warn("Failed to claim monitor notification; continuing without dedupe", {
+        error,
+        monitorId: monitor.id,
+        checkId: check.id,
+      });
+      return true;
+    }))) {
       const notificationStatus = await sendNotifications({
         monitor,
         check,
