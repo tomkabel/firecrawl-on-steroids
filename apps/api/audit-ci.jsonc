@@ -9,6 +9,16 @@
         // Blocked until geoip-country ships a dependency on ip-address>=10.1.1.
         // Owner: team-engineering-reviewers. Tracking: create internal ticket.
         // Expires: 2026-06-15.
-        "GHSA-v2v4-37r5-5v8g"
+        "GHSA-v2v4-37r5-5v8g",
+        // GHSA-866g-f22w-33x8 (@ai-sdk/provider-utils Uncontrolled Resource Consumption):
+        // patched_versions: "<0.0.0" — no upstream fix exists as of 2026-05-29.
+        // Affected code: createJsonResponseHandler/createJsonErrorResponseHandler in
+        // @ai-sdk/provider-utils <=3.0.97. CVSS 4.3 (low), requires authenticated access
+        // (PR:L), impact limited to resource consumption in AI-provider response parsing.
+        // Not directly reachable via user-controlled input.
+        // Blocked until upstream ships a patched release of @ai-sdk/provider-utils.
+        // Owner: team-engineering-reviewers. Tracking: create internal ticket.
+        // Expires: 2026-08-29.
+        "GHSA-866g-f22w-33x8"
     ]
 }
