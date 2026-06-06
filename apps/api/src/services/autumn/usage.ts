@@ -40,47 +40,23 @@ async function lookupOrgId(teamId: string): Promise<string> {
   return data.org_id;
 }
 
-// 32 hex chars = a UUID with the dashes stripped. Some legacy events in
-// Autumn's 90-day window were tagged with this form instead of the numeric
-// api_keys.id, so we accept it as an alternate lookup against api_keys.key.
-const HEX32_REGEX = /^[0-9a-f]{32}$/i;
-const UNKNOWN_API_KEY_LABEL = "Unknown";
-
-function toUuidWithDashes(hex32: string): string {
-  return `${hex32.slice(0, 8)}-${hex32.slice(8, 12)}-${hex32.slice(
-    12,
-    16,
-  )}-${hex32.slice(16, 20)}-${hex32.slice(20)}`;
-}
-
 /**
  * Maps API key identifiers from Autumn events to their display names.
  *
- * Autumn returns whatever value was sent as `properties.apiKeyId`. Current code
- * sends the numeric `api_keys.id`, but the 90-day aggregation window can still
- * include legacy events where the value was the `api_keys.key` UUID (with
- * dashes stripped) or some other opaque identifier. We try both forms and fall
- * back to a friendly label so the response never surfaces raw hex strings.
+ * Autumn returns whatever value was sent as `properties.apiKeyId`. Current
+ * code sends the numeric `api_keys.id`, but the 90-day aggregation window can
+ * still include legacy events tagged with opaque non-numeric values. Anything
+ * we can't resolve is labeled "Unknown" so the response never surfaces raw
+ * identifiers.
  */
 async function lookupApiKeyNames(
   apiKeyIds: string[],
 ): Promise<Record<string, string>> {
+  const numericIds = apiKeyIds
+    .map(id => Number(id))
+    .filter(n => Number.isInteger(n) && n > 0);
+
   const nameMap: Record<string, string> = {};
-
-  const numericIds: number[] = [];
-  const hexKeys: string[] = [];
-  const uuidByHex: Record<string, string> = {};
-
-  for (const id of apiKeyIds) {
-    const asNumber = Number(id);
-    if (Number.isInteger(asNumber) && asNumber > 0) {
-      numericIds.push(asNumber);
-    } else if (HEX32_REGEX.test(id)) {
-      const uuid = toUuidWithDashes(id);
-      hexKeys.push(uuid);
-      uuidByHex[uuid] = id;
-    }
-  }
 
   if (numericIds.length > 0) {
     const rows = await dbRr
@@ -89,28 +65,12 @@ async function lookupApiKeyNames(
       .where(inArray(schema.api_keys.id, numericIds));
 
     for (const row of rows) {
-      nameMap[String(row.id)] = row.name ?? UNKNOWN_API_KEY_LABEL;
-    }
-  }
-
-  if (hexKeys.length > 0) {
-    const rows = await dbRr
-      .select({ key: schema.api_keys.key, name: schema.api_keys.name })
-      .from(schema.api_keys)
-      .where(inArray(schema.api_keys.key, hexKeys));
-
-    for (const row of rows) {
-      const originalId = row.key ? uuidByHex[row.key] : undefined;
-      if (originalId) {
-        nameMap[originalId] = row.name ?? UNKNOWN_API_KEY_LABEL;
-      }
+      nameMap[String(row.id)] = row.name ?? "Unknown";
     }
   }
 
   for (const id of apiKeyIds) {
-    if (!nameMap[id]) {
-      nameMap[id] = UNKNOWN_API_KEY_LABEL;
-    }
+    if (!nameMap[id]) nameMap[id] = "Unknown";
   }
 
   return nameMap;

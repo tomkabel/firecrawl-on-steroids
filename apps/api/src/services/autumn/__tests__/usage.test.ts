@@ -19,7 +19,7 @@ let teamLookup = {
   error: null as unknown,
 };
 
-let apiKeysData: Array<{ id?: number; key?: string; name: string }> = [];
+let apiKeysData: Array<{ id: number; name: string }> = [];
 
 jest.mock("../client", () => ({
   get autumnClient() {
@@ -910,34 +910,6 @@ describe("getTeamHistoricalUsageByApiKey", () => {
         groupBy: "properties.apiKeyId",
       }),
     );
-  });
-
-  it("resolves 32-hex-char apiKeyIds against api_keys.key as a fallback", async () => {
-    // Legacy events in Autumn's 90-day window can carry the api_keys.key UUID
-    // with dashes stripped instead of the numeric api_keys.id.
-    apiKeysData = [
-      { key: "ba9045ff-fbd3-4fc8-aabc-2597df6ba044", name: "legacy-key" },
-    ];
-
-    mockAggregate.mockResolvedValue({
-      list: [
-        {
-          period: Date.parse("2026-04-15T00:00:00.000Z"),
-          grouped_values: {
-            CREDITS: { ba9045fffbd34fc8aabc2597df6ba044: 42 },
-          },
-        },
-      ],
-    });
-
-    await expect(getTeamHistoricalUsageByApiKey("team-1")).resolves.toEqual([
-      {
-        startDate: "2026-04-01T00:00:00.000Z",
-        endDate: null,
-        apiKey: "legacy-key",
-        creditsUsed: 42,
-      },
-    ]);
   });
 
   it("labels unresolvable apiKeyIds as 'Unknown' instead of echoing raw values", async () => {
