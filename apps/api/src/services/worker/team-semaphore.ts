@@ -32,6 +32,8 @@ const semaphoreHoldDuration = new Histogram({
 const { scripts, runScript, ensure } = nuqRedis;
 
 const SEMAPHORE_TTL = 30 * 1000;
+type MirrorBackend = "pg" | "fdb";
+type MirrorState = { backend?: MirrorBackend; touched: Set<MirrorBackend> };
 
 async function acquire(
   teamId: string,
@@ -143,14 +145,14 @@ function startHeartbeat(
   teamId: string,
   holderId: string,
   intervalMs: number,
-  fdbTeam: boolean,
+  mirrorState: MirrorState,
 ) {
   let stopped = false;
 
   const promise = (async () => {
     try {
       while (!stopped) {
-        await mirrorSlotAcquire(teamId, holderId, fdbTeam).catch(() => {
+        await mirrorSlotAcquire(teamId, holderId, mirrorState).catch(() => {
           _logger.warn("Failed to update concurrency limit active job", {
             teamId,
             jobId: holderId,
@@ -183,28 +185,59 @@ function startHeartbeat(
 // Sync scrapes occupy queue capacity so async jobs see the team's real load.
 // PG-backed teams mirror into the Redis ZSET; FDB-backed teams consume an
 // external slot on the FDB ledger.
+async function resolveMirrorBackend(teamId: string): Promise<MirrorBackend> {
+  return (await isFdbTeam(teamId)) ? "fdb" : "pg";
+}
+
+async function releaseMirrorBackend(
+  teamId: string,
+  holderId: string,
+  backend: MirrorBackend,
+): Promise<void> {
+  if (backend === "fdb") {
+    await externalSlotsFdb.release(teamId, holderId);
+  } else {
+    await removeConcurrencyLimitActiveJob(teamId, holderId);
+  }
+}
+
 async function mirrorSlotAcquire(
   teamId: string,
   holderId: string,
-  fdbTeam: boolean,
+  state: MirrorState,
 ): Promise<void> {
-  if (fdbTeam) {
+  const backend = await resolveMirrorBackend(teamId);
+  if (backend === "fdb") {
     await externalSlotsFdb.acquire(teamId, holderId, 60 * 1000);
   } else {
     await pushConcurrencyLimitActiveJob(teamId, holderId, 60 * 1000);
+  }
+  const previous = state.backend;
+  state.backend = backend;
+  state.touched.add(backend);
+  if (previous && previous !== backend) {
+    await releaseMirrorBackend(teamId, holderId, previous);
+    state.touched.delete(previous);
   }
 }
 
 async function mirrorSlotRelease(
   teamId: string,
   holderId: string,
-  fdbTeam: boolean,
+  state: MirrorState,
 ): Promise<void> {
-  if (fdbTeam) {
-    await externalSlotsFdb.release(teamId, holderId);
-  } else {
-    await removeConcurrencyLimitActiveJob(teamId, holderId);
+  const backends = Array.from(state.touched);
+  const results = await Promise.allSettled(
+    backends.map(backend => releaseMirrorBackend(teamId, holderId, backend)),
+  );
+  const failed = results.find(
+    (result): result is PromiseRejectedResult => result.status === "rejected",
+  );
+  if (failed) {
+    throw failed.reason;
   }
+  state.backend = undefined;
+  state.touched.clear();
 }
 
 async function withSemaphore<T>(
@@ -224,8 +257,6 @@ async function withSemaphore<T>(
     return await func(false);
   }
 
-  const fdbTeam = await isFdbTeam(teamId);
-
   const { limited } = await acquireBlocking(teamId, holderId, limit, {
     base_delay_ms: 25,
     max_delay_ms: 250,
@@ -234,16 +265,18 @@ async function withSemaphore<T>(
   });
 
   const endTimer = semaphoreHoldDuration.startTimer();
-  const hb = startHeartbeat(teamId, holderId, SEMAPHORE_TTL / 2, fdbTeam);
+  const mirrorState: MirrorState = { touched: new Set() };
+  let hb: ReturnType<typeof startHeartbeat> | null = null;
 
   activeSemaphores.inc();
   try {
-    await mirrorSlotAcquire(teamId, holderId, fdbTeam);
+    await mirrorSlotAcquire(teamId, holderId, mirrorState);
+    hb = startHeartbeat(teamId, holderId, SEMAPHORE_TTL / 2, mirrorState);
 
     const result = await Promise.race([func(limited), hb.promise]);
     return result;
   } finally {
-    await mirrorSlotRelease(teamId, holderId, fdbTeam).catch(() => {
+    await mirrorSlotRelease(teamId, holderId, mirrorState).catch(() => {
       _logger.warn("Failed to remove concurrency limit active job", {
         teamId,
         jobId: holderId,
@@ -251,7 +284,7 @@ async function withSemaphore<T>(
     });
 
     activeSemaphores.dec();
-    hb.stop();
+    hb?.stop();
     endTimer();
 
     await release(teamId, holderId).catch(() => {});

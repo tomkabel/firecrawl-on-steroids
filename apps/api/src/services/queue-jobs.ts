@@ -570,11 +570,7 @@ export async function addScrapeJobs(
         })),
         teamId,
       );
-      if (
-        backloggedCount > 0 &&
-        teamLimit !== null &&
-        backloggedCount > teamLimit
-      ) {
+      if (backloggedCount > 0) {
         await maybeSendConcurrencyNotificationFdb(
           teamId,
           teamLimit,

@@ -53,6 +53,10 @@ type SweepLagStats = {
   durationMs: number;
 };
 
+function keyAfter(key: Buffer): Buffer {
+  return Buffer.concat([key, Buffer.from([0])]);
+}
+
 function entryFromMeta(id: string, meta: JobMeta): QueueEntry {
   return {
     i: id,
@@ -429,19 +433,22 @@ export class NuqFdbSweeper {
     for (const [key] of tasks) {
       const gid = ks.unpackId(key as Buffer);
       let exhausted = false;
+      let begin: Buffer | null = null;
       // clean pending members in batches until none remain
       for (let rounds = 0; rounds < 50 && !exhausted; rounds++) {
-        exhausted = await this.db.doTn(async tn => {
-          const txc = newTxContext();
+        const result = await this.db.doTn(async tn => {
           const jr = ks.groupJobRange(gid);
+          const rangeBegin = begin ?? jr.begin;
           const members = await tn
             .snapshot()
-            .getRangeAll(jr.begin, jr.end, { limit: 500 });
+            .getRangeAll(rangeBegin, jr.end, { limit: 500 });
           let cleaned = 0;
           for (const [mKey, mValue] of members) {
             const gj = decodeJson<GroupJobIndexValue>(mValue as Buffer);
             if (!gj || gj.s !== "pending") continue;
-            if (cleaned >= SWEEP_BATCH) return false;
+            if (cleaned >= SWEEP_BATCH) {
+              return { exhausted: false, nextBegin: rangeBegin };
+            }
             const id = ks.unpackId(mKey as Buffer);
             const st = decodeJson<JobStatusRecord>(
               await tn.get(ks.jobStatus(id)),
@@ -465,8 +472,16 @@ export class NuqFdbSweeper {
             deleteJobRecords(tn, ks, id);
             cleaned++;
           }
-          return true;
+          const lastKey = members[members.length - 1]?.[0] as
+            | Buffer
+            | undefined;
+          return {
+            exhausted: members.length < 500,
+            nextBegin: lastKey ? keyAfter(lastKey) : jr.end,
+          };
         });
+        exhausted = result.exhausted;
+        begin = result.nextBegin;
       }
       if (exhausted) {
         await this.db.doTn(async tn => {

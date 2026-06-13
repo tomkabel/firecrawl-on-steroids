@@ -53,12 +53,12 @@ export async function queueStatusController(
   // during the FDB migration a team can have load on both ledgers
   if (fdbQueueEnabled()) {
     try {
-      activeJobsOfTeam += await scrapeQueueFdb.getTeamActiveCount(
-        req.auth.team_id,
-      );
-      queuedJobsOfTeam += await scrapeQueueFdb.getTeamPendingCount(
-        req.auth.team_id,
-      );
+      const [fdbActive, fdbPending] = await Promise.all([
+        scrapeQueueFdb.getTeamActiveCount(req.auth.team_id),
+        scrapeQueueFdb.getTeamPendingCount(req.auth.team_id),
+      ]);
+      activeJobsOfTeam += fdbActive;
+      queuedJobsOfTeam += fdbPending;
     } catch (error) {
       logger.warn("Failed to read FDB queue counts, falling back to Redis", {
         module: "queue-status",

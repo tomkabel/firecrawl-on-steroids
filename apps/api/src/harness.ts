@@ -744,16 +744,13 @@ async function setupFdb(): Promise<Services["fdb"]> {
 
   await waitForFdb(runtime, containerName);
 
-  // first boot: create the database (idempotent failure if it exists)
-  try {
-    const configure = execForward(
-      `${runtime}@fdb-configure`,
-      `${runtime} exec ${containerName} fdbcli --exec "configure new single memory"`,
-    );
-    await configure.promise;
-  } catch (e) {
-    logger.info("FoundationDB database already configured");
-  }
+  // first boot: create the database; only suppress the known "already
+  // configured" failure and surface any real configure error.
+  const configure = execForward(
+    `${runtime}@fdb-configure`,
+    `${runtime} exec ${containerName} sh -c 'out=$(fdbcli --exec "configure new single memory" 2>&1); status=$?; printf "%s\\n" "$out"; if [ "$status" -eq 0 ]; then exit 0; fi; printf "%s\\n" "$out" | grep -Eiq "already.*configured|database.*configured"'`,
+  );
+  await configure.promise;
 
   // the host-side client needs a cluster file pointing at the published port
   const { writeFileSync, mkdirSync } = await import("fs");

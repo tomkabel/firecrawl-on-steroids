@@ -9,6 +9,7 @@ import {
   getNuqFdbDatabase,
   getFdb,
 } from "../../services/worker/nuq-fdb/client";
+import { encodeJson } from "../../services/worker/nuq-fdb/keyspace";
 
 // These tests exercise the FDB queue core directly against a real FoundationDB
 // cluster (no API server needed). They are skipped when FDB is not configured.
@@ -479,6 +480,45 @@ describeIf("NuQ FDB core", () => {
     expect(fin).not.toBeNull();
     expect(fin!.groupId).toBe(gid);
     await finishedQueue.jobFinish(fin!.id, fin!.lock!, null);
+  });
+
+  test("group cancellation scans past stale group-index rows before clearing task", async () => {
+    const { queue, group, sweeper } = await makeCtx("cancel-stale-index");
+    const db = getNuqFdbDatabase();
+    const owner = freshOwner();
+    const gid = randomUUID();
+    const pendingId = "zzzz-real-pending";
+    await group.addGroup(gid, owner);
+
+    await db.doTn(async tn => {
+      for (let i = 0; i < 600; i++) {
+        tn.set(
+          queue.ks.groupJob(gid, `0000-stale-${String(i).padStart(4, "0")}`),
+          encodeJson({ m: 1, s: "pending" }),
+        );
+      }
+    });
+
+    await queue.addJob(
+      pendingId,
+      scrapeData(),
+      {
+        ownerId: owner,
+        groupId: gid,
+        timesOutAt: new Date(Date.now() + 60_000),
+      },
+      gate(0),
+    );
+    expect(await queue.getTeamPendingCount(owner)).toBe(1);
+
+    expect(await group.cancelGroup(gid)).toBe(true);
+    await sweeper.sweepOnce();
+
+    expect(await queue.getJob(pendingId)).toBeNull();
+    expect(await queue.getTeamPendingCount(owner)).toBe(0);
+    await db.doTn(async tn => {
+      expect(await tn.get(queue.ks.taskGroupCancel(gid))).toBeNull();
+    });
   });
 
   test("waitForJob resolves on completion and rejects on failure", async () => {
