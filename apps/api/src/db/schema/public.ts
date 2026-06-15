@@ -20,6 +20,16 @@ const ts = (name: string) =>
 const bigintNum = (name: string) => bigint(name, { mode: "number" });
 const num = (name: string) => numeric(name, { mode: "number" });
 
+// Keyless free-tier credit usage log (see keyless_credit_usage migration).
+// team_id is the deterministic per-IP keyless team UUID; ip is the raw client IP.
+export const keyless_credit_usage = pgTable("keyless_credit_usage", {
+  id: bigintNum("id").notNull().generatedByDefaultAsIdentity(),
+  team_id: uuid("team_id").notNull(),
+  ip: text("ip").notNull(),
+  credits_used: integer("credits_used").notNull(),
+  created_at: ts("created_at").notNull().defaultNow(),
+});
+
 export const agent_sponsors = pgTable("agent_sponsors", {
   id: bigintNum("id").notNull().generatedByDefaultAsIdentity(),
   email: text("email").notNull(),

@@ -137,9 +137,9 @@ export class FirecrawlClient {
     const apiKey = (opts.apiKey ?? process.env.FIRECRAWL_API_KEY ?? "").trim();
     const apiUrl = (opts.apiUrl ?? process.env.FIRECRAWL_API_URL ?? "https://api.firecrawl.dev").replace(/\/$/, "");
 
-    if (this.isCloudService(apiUrl) && !apiKey) {
-      throw new Error("API key is required for the cloud API. Set FIRECRAWL_API_KEY env or pass apiKey.");
-    }
+    // No API key is allowed: scrape, search, and interact fall back to the
+    // keyless free tier (rate-limited per IP). Other methods will return 401
+    // from the API until a key is provided.
 
     this.http = new HttpClient({
       apiKey,
