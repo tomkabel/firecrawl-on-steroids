@@ -1,6 +1,8 @@
 import {
   ALLOW_TEST_SUITE_WEBSITE,
+  HAS_PROXY,
   TEST_PRODUCTION,
+  TEST_SELF_HOST,
   TEST_SUITE_WEBSITE,
   testIf,
 } from "../lib";
@@ -14,10 +16,11 @@ import { promisify } from "util";
 
 const execFileAsync = promisify(execFile);
 const TLS_FIXTURE_BODY = "skip tls verification fixture";
+const ALLOW_LOCAL_TLS_TEST = TEST_SELF_HOST && !HAS_PROXY;
 
 describe("V2 Scrape skipTlsVerification Default", () => {
   let identity: Identity;
-  let tlsServer: Server;
+  let tlsServer: Server | undefined;
   let tlsServerUrl: string;
   let tlsTempDir: string | undefined;
 
@@ -27,6 +30,10 @@ describe("V2 Scrape skipTlsVerification Default", () => {
       concurrency: 100,
       credits: 1000000,
     });
+
+    if (!ALLOW_LOCAL_TLS_TEST) {
+      return;
+    }
 
     tlsTempDir = await mkdtemp(path.join(tmpdir(), "firecrawl-skip-tls-"));
     const keyPath = path.join(tlsTempDir, "key.pem");
@@ -62,10 +69,10 @@ describe("V2 Scrape skipTlsVerification Default", () => {
     });
 
     await new Promise<void>((resolve, reject) => {
-      tlsServer.once("error", reject);
-      tlsServer.listen(0, "127.0.0.1", () => {
-        tlsServer.off("error", reject);
-        const address = tlsServer.address();
+      tlsServer!.once("error", reject);
+      tlsServer!.listen(0, "127.0.0.1", () => {
+        tlsServer!.off("error", reject);
+        const address = tlsServer!.address();
         if (address && typeof address === "object") {
           tlsServerUrl = `https://127.0.0.1:${address.port}/`;
           resolve();
@@ -77,16 +84,18 @@ describe("V2 Scrape skipTlsVerification Default", () => {
   }, 20000);
 
   afterAll(async () => {
-    await new Promise<void>(resolve => {
-      tlsServer.close(() => resolve());
-    });
+    if (tlsServer) {
+      await new Promise<void>(resolve => {
+        tlsServer!.close(() => resolve());
+      });
+    }
 
     if (tlsTempDir) {
       await rm(tlsTempDir, { recursive: true, force: true });
     }
   });
 
-  test(
+  testIf(ALLOW_LOCAL_TLS_TEST)(
     "should default skipTlsVerification to true in v2 API",
     async () => {
       const data = await scrape(
@@ -103,7 +112,7 @@ describe("V2 Scrape skipTlsVerification Default", () => {
     scrapeTimeout,
   );
 
-  test(
+  testIf(ALLOW_LOCAL_TLS_TEST)(
     "should allow explicit skipTlsVerification: false override",
     async () => {
       const response = await scrapeRaw(
