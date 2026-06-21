@@ -1,0 +1,53 @@
+# docker-compose.chaser.yaml — Phase 4 override file
+#
+# Adds chaser-oxide as a hardened, fingerprint-randomizing rendering backend.
+# This is a standalone /scrape endpoint that matches the canonical contract —
+# it can be used as a drop-in replacement for PLAYWRIGHT_MICROSERVICE_URL.
+#
+# Activation criteria (all must be true, measured over 30 days):
+#   1. Failure rate > 5% on anti-bot-protected sites even with Phase 3 fallbacks
+#   2. Business need documented — specific target sites unscrapable with current toolchain
+#   3. Phase 3 stealth-browser-mcp is performing (MCP bridge pattern proven)
+#
+# Only enable if you meet these criteria.
+
+services:
+  chaser-service:
+    build:
+      context: .
+      dockerfile: apps/chaser-service/Dockerfile
+    image: firecrawl/chaser-service:local
+    networks:
+      - firecrawl-net
+    ports:
+      - "127.0.0.1:${CHASER_HOST_PORT:-3100}:3000"
+    environment:
+      PORT: 3000
+      MAX_CONCURRENT_PAGES: ${CHASER_CONCURRENT_PAGES:-10}
+      ALLOW_LOCAL_WEBHOOKS: ${ALLOW_LOCAL_WEBHOOKS:-False}
+      DNS_CACHE_TTL_MS: ${DNS_CACHE_TTL_MS:-30000}
+    cpus: 2.0
+    mem_limit: 2G
+    memswap_limit: 2G
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp:noexec,nosuid,size=512m
+    volumes:
+      - chaser-data:/home/app/.cache
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:3000/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+        compress: "true"
+
+volumes:
+  chaser-data:

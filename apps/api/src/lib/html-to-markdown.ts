@@ -7,6 +7,7 @@ import type { Logger } from "winston";
 import { stat } from "fs/promises";
 import { HTML_TO_MARKDOWN_PATH } from "../natives";
 import { convertHTMLToMarkdownWithHttpService } from "./html-to-markdown-client";
+import { convertHTMLToMarkdownWithCrawl4AI } from "./crawl4ai-converter";
 import { postProcessMarkdown } from "@mendable/firecrawl-rs";
 
 // TODO: add a timeout to the Go parser
@@ -66,6 +67,37 @@ export async function parseMarkdown(
   const contextLogger = context?.logger || logger;
   const requestId = context?.requestId;
   const zeroDataRetention = context?.zeroDataRetention === true;
+
+  const conversionContext = {
+    logger: contextLogger,
+    requestId,
+    zeroDataRetention,
+  };
+
+  // Try Crawl4AI first if enabled
+  if (config.CRAWL4AI_URL) {
+    try {
+      let markdownContent = await convertHTMLToMarkdownWithCrawl4AI(
+        html,
+        conversionContext,
+      );
+      if (markdownContent !== null) {
+        markdownContent = await postProcessMarkdown(markdownContent);
+        return markdownContent;
+      }
+    } catch (error) {
+      contextLogger.error(
+        "Error converting HTML to Markdown with Crawl4AI, falling back",
+        { error },
+      );
+      Sentry.captureException(error, {
+        tags: {
+          fallback: "crawl4ai",
+          ...(requestId && !zeroDataRetention ? { request_id: requestId } : {}),
+        },
+      });
+    }
+  }
 
   // Try HTTP service first if enabled
   if (config.HTML_TO_MARKDOWN_SERVICE_URL) {

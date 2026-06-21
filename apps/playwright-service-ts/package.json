@@ -12,6 +12,7 @@
   "author": "Jeff Pereira",
   "license": "ISC",
   "dependencies": {
+    "@firecrawl/ssrf-protection": "file:../ssrf-protection",
     "dotenv": "^16.4.5",
     "express": "^5.2.1",
     "ipaddr.js": "^2.3.0",

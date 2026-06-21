@@ -277,20 +277,22 @@ const workerFun = async (
     const token = uuidv7();
     const canAcceptConnection = await monitor.acceptConnection();
     if (!canAcceptConnection) {
-      console.log("Can't accept connection due to RAM/CPU load");
-      logger.info("Can't accept connection due to RAM/CPU load");
       cantAcceptConnectionCount++;
 
-      isWorkerStalled = cantAcceptConnectionCount >= 25;
-
-      if (isWorkerStalled) {
+      if (cantAcceptConnectionCount === 25) {
+        isWorkerStalled = true;
         logger.error("WORKER STALLED", {
           cpuUsage: await monitor.checkCpuUsage(),
           memoryUsage: await monitor.checkMemoryUsage(),
         });
       }
 
-      await sleep(cantAcceptConnectionInterval);
+      // Adaptive backoff: 2s → 4s → 8s → 16s → 30s max
+      const backoffMs = Math.min(
+        cantAcceptConnectionInterval * Math.pow(2, Math.min(cantAcceptConnectionCount - 1, 4)),
+        30000,
+      );
+      await sleep(backoffMs);
       continue;
     } else if (!currentLiveness) {
       logger.info("Not accepting jobs because the liveness check failed");
@@ -298,6 +300,7 @@ const workerFun = async (
       await sleep(cantAcceptConnectionInterval);
       continue;
     } else {
+      isWorkerStalled = false;
       cantAcceptConnectionCount = 0;
     }
 

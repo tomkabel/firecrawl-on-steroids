@@ -1,0 +1,7 @@
+# Exclude host build artifacts (the Docker build has its own target/ in /build)
+chaser-oxide/target/
+
+# Exclude other large directories
+apps/**/node_modules/
+**/*.log
+.git/
