@@ -1,5 +1,4 @@
 import { logger } from "../../lib/logger";
-import { config } from "../../config";
 import { getRedisConnection } from "../queue-service";
 import { billTeam6 } from "../../db/rpc";
 import * as Sentry from "@sentry/node";
@@ -215,18 +214,29 @@ export async function processBillingBatch() {
           `✅ Successfully billed team ${group.team_id} for ${group.total_credits} credits`,
         );
 
+        // When request-scoped tracking is enabled for this team, the request
+        // path (billTeam / billScrapeJob) is the sole source of Autumn usage
+        // events. Re-tracking here would double-count usage, so the batch only
+        // commits the ledger above. We gate on the team's enablement rather
+        // than the per-op autumnTrackInRequest flag because that flag can
+        // desync when a request-time track persisted the event but reported
+        // failure to the caller.
         if (batchTrackedCredits > 0) {
-          await autumnService.trackCredits({
-            teamId: group.team_id,
-            value: batchTrackedCredits,
-            properties: {
-              source: "processBillingBatch",
-              ...toAutumnBillingProperties(group.billing),
-              apiKeyId: group.api_key_id,
-              subscriptionId: group.subscription_id,
-            },
-            featureId: featureIdForBillingEndpoint(group.billing.endpoint),
-          });
+          const requestTrackEnabled =
+            await autumnService.isRequestTrackEnabledForTeam(group.team_id);
+          if (!requestTrackEnabled) {
+            await autumnService.trackCredits({
+              teamId: group.team_id,
+              value: batchTrackedCredits,
+              properties: {
+                source: "processBillingBatch",
+                ...toAutumnBillingProperties(group.billing),
+                apiKeyId: group.api_key_id,
+                subscriptionId: group.subscription_id,
+              },
+              featureId: featureIdForBillingEndpoint(group.billing.endpoint),
+            });
+          }
         }
       } catch (error) {
         await refundRequestTrackedCredits(group);

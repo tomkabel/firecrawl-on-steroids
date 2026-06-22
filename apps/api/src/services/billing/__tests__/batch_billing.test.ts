@@ -10,6 +10,7 @@ const {
   withAuth,
   trackCredits,
   refundCredits,
+  isRequestTrackEnabledForTeam,
   billTeam6,
   setCachedACUC,
   setCachedACUCTeam,
@@ -26,6 +27,7 @@ const {
     withAuth: vi.fn((fn: any) => fn),
     trackCredits: vi.fn<(args: any) => Promise<boolean>>(),
     refundCredits: vi.fn<(args: any) => Promise<void>>(),
+    isRequestTrackEnabledForTeam: vi.fn<(teamId: string) => Promise<boolean>>(),
     billTeam6: vi.fn<(params: any) => Promise<{ api_key: string }[]>>(),
     setCachedACUC: vi.fn(),
     setCachedACUCTeam: vi.fn(),
@@ -48,6 +50,7 @@ vi.mock("../../autumn/autumn.service", () => ({
   autumnService: {
     trackCredits,
     refundCredits,
+    isRequestTrackEnabledForTeam,
   },
   featureIdForBillingEndpoint: (endpoint?: string) =>
     endpoint === "search" ? "SEARCH_CREDITS" : "CREDITS",
@@ -148,6 +151,7 @@ beforeEach(() => {
   billTeam6.mockResolvedValue([]);
   trackCredits.mockResolvedValue(true);
   refundCredits.mockResolvedValue(undefined);
+  isRequestTrackEnabledForTeam.mockResolvedValue(false);
 });
 
 describe("processBillingBatch", () => {
@@ -166,12 +170,28 @@ describe("processBillingBatch", () => {
         apiKeyId: 123,
         subscriptionId: "sub-1",
       },
+      featureId: "CREDITS",
     });
     expect(captureException).not.toHaveBeenCalled();
   });
 
   it("skips Autumn tracking when the request path already tracked the op", async () => {
     queue = [makeOp({ autumnTrackInRequest: true })];
+
+    await processBillingBatch();
+
+    expect(billTeam6).toHaveBeenCalled();
+    expect(trackCredits).not.toHaveBeenCalled();
+  });
+
+  it("does not re-track to Autumn when request-scoped tracking is enabled for the team", async () => {
+    // The op claims it was not request-tracked, but the team has request-scoped
+    // tracking enabled — the request path owns Autumn usage, so re-tracking here
+    // would double-count. The ledger must still be committed.
+    isRequestTrackEnabledForTeam.mockResolvedValue(true);
+    queue = [
+      makeOp({ billing: { endpoint: "search" }, autumnTrackInRequest: false }),
+    ];
 
     await processBillingBatch();
 
@@ -194,6 +214,7 @@ describe("processBillingBatch", () => {
         apiKeyId: 123,
         subscriptionId: "sub-1",
       },
+      featureId: "CREDITS",
     });
     expect(captureException).toHaveBeenCalled();
   });
@@ -213,6 +234,7 @@ describe("processBillingBatch", () => {
         apiKeyId: 123,
         subscriptionId: "sub-1",
       },
+      featureId: "CREDITS",
     });
     expect(captureException).toHaveBeenCalled();
   });
@@ -246,6 +268,7 @@ describe("processBillingBatch", () => {
         apiKeyId: 123,
         subscriptionId: "sub-1",
       },
+      featureId: "CREDITS",
     });
     expect(billTeam6).toHaveBeenCalledTimes(2);
     expect(trackCredits).toHaveBeenCalledWith({
@@ -257,6 +280,7 @@ describe("processBillingBatch", () => {
         apiKeyId: 123,
         subscriptionId: "sub-2",
       },
+      featureId: "CREDITS",
     });
     expect(captureException).toHaveBeenCalled();
   });

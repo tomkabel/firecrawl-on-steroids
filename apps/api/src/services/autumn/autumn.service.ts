@@ -497,6 +497,35 @@ export class AutumnService {
   }
 
   /**
+   * Whether request-scoped Autumn usage tracking is active for a team's org.
+   *
+   * When this is true, the request path (billTeam / billScrapeJob) is the
+   * single source of Autumn usage events, so the batch reconciler must NOT
+   * re-track usage — doing so double-counts. When false (experiment off or the
+   * org isn't enrolled) the request path never tracked, so the batch is
+   * responsible for it instead.
+   *
+   * This intentionally resolves enablement from the org rather than trusting
+   * the per-operation autumnTrackInRequest flag, which can desync from reality
+   * when a request-time track persisted the event in Autumn but reported
+   * failure to the caller.
+   */
+  async isRequestTrackEnabledForTeam(teamId: string): Promise<boolean> {
+    if (config.AUTUMN_REQUEST_TRACK_EXPERIMENT !== "true") return false;
+    if (this.isPreviewTeam(teamId)) return false;
+    try {
+      const orgId = await this.resolveOrgId(teamId);
+      return isAutumnRequestTrackEnabled(orgId);
+    } catch (error) {
+      logger.warn(
+        "Failed to resolve request-track enablement for team — assuming disabled",
+        { teamId, error },
+      );
+      return false;
+    }
+  }
+
+  /**
    * Records a credit usage event directly in Autumn. Returns true on success.
    *
    * For request-scoped tracking the AUTUMN_REQUEST_TRACK_EXPERIMENT gate is
