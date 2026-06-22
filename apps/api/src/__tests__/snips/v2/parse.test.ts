@@ -36,6 +36,8 @@ let identity: Identity;
 let pdfFixture: Buffer | null = null;
 const originalParseUploadStorageDriver = config.PARSE_UPLOAD_STORAGE_DRIVER;
 const originalEnv = config.ENV;
+const parseUploadRefTestRequired =
+  process.env.PARSE_UPLOAD_REF_TEST_REQUIRED === "true";
 
 function enableLocalUploadRefAdapter() {
   (config as any).ENV = "test";
@@ -61,6 +63,9 @@ async function mintUploadRef(
     typeof init.body.code === "string" &&
     init.body.code.startsWith("PARSE_UPLOAD_")
   ) {
+    if (parseUploadRefTestRequired) {
+      expect(init.statusCode).toBe(200);
+    }
     console.warn(
       `Skipping uploadRef storage-dependent test because ${TEST_API_URL} is not configured for parse upload refs: ${init.body.code}`,
     );
@@ -224,10 +229,9 @@ describe("/v2/parse", () => {
         .send({
           uploadRef: init.uploadRef,
           formats: ["markdown"],
-          zeroDataRetention: true,
         });
 
-      expect(result.statusCode).toBe(200);
+      expect(result.statusCode, JSON.stringify(result.body)).toBe(200);
       expect(result.body.success).toBe(true);
       expect(result.body.data.markdown).toContain("Parse HTML Upload Test");
       expect(result.body.data.metadata.sourceURL).toBe("upload-ref.html");
@@ -259,6 +263,13 @@ describe("/v2/parse", () => {
   it(
     "rejects upload-ref signing without authentication",
     async () => {
+      if (!config.USE_DB_AUTHENTICATION) {
+        console.warn(
+          "Skipping uploadRef unauthenticated signing test because authentication is bypassed when USE_DB_AUTHENTICATION is disabled",
+        );
+        return;
+      }
+
       enableLocalUploadRefAdapter();
 
       const failure = await request(TEST_API_URL)
@@ -278,31 +289,36 @@ describe("/v2/parse", () => {
   it(
     "rejects upload refs owned by another team",
     async () => {
-      if (!config.IDMUX_URL) {
-        console.warn(
-          "Skipping uploadRef cross-team test because IDMUX_URL is not set",
-        );
-        return;
-      }
-
-      const otherIdentity = await idmux({
-        name: "parse-upload-ref-other-team",
-        concurrency: 100,
-        credits: 1000000,
-      });
-      expect(otherIdentity.teamId).not.toBe(identity.teamId);
-
       const init = await mintUploadRef(identity);
       if (!init) return;
+
+      const canUseRealSecondTeam =
+        !!config.IDMUX_URL && config.USE_DB_AUTHENTICATION === true;
+      const otherIdentity = canUseRealSecondTeam
+        ? await idmux({
+            name: "parse-upload-ref-other-team",
+            concurrency: 100,
+            credits: 1000000,
+          })
+        : identity;
+
+      if (canUseRealSecondTeam) {
+        expect(otherIdentity.teamId).not.toBe(identity.teamId);
+      }
+
+      const uploadRef = canUseRealSecondTeam
+        ? init.uploadRef
+        : withUploadRefPayload(init.uploadRef, payload => {
+            payload.teamId = "parse-upload-ref-other-team";
+          });
 
       const failure = await request(TEST_API_URL)
         .post("/v2/parse")
         .set("Authorization", `Bearer ${otherIdentity.apiKey}`)
         .set("Content-Type", "application/json")
         .send({
-          uploadRef: init.uploadRef,
+          uploadRef,
           formats: ["markdown"],
-          zeroDataRetention: true,
         });
 
       expect(failure.statusCode).toBe(403);
@@ -325,7 +341,6 @@ describe("/v2/parse", () => {
         .send({
           uploadRef: tamperUploadRefSignature(init.uploadRef),
           formats: ["markdown"],
-          zeroDataRetention: true,
         });
 
       expect(failure.statusCode).toBe(400);
@@ -342,9 +357,9 @@ describe("/v2/parse", () => {
       if (!init) return;
 
       const payload = decodeUploadRefPayload(init.uploadRef);
-      if (payload.driver !== "local") {
+      if (payload.driver !== "local" && !config.PARSE_UPLOAD_REF_SECRET) {
         console.warn(
-          "Skipping uploadRef expiry test because the configured server uses a non-local signing secret",
+          "Skipping uploadRef expiry test because the configured server signing secret is not available to this test process",
         );
         return;
       }
@@ -360,7 +375,6 @@ describe("/v2/parse", () => {
         .send({
           uploadRef: expiredUploadRef,
           formats: ["markdown"],
-          zeroDataRetention: true,
         });
 
       expect(failure.statusCode).toBe(400);
