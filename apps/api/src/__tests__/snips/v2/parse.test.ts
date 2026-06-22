@@ -18,6 +18,7 @@ import { and, desc, eq } from "drizzle-orm";
 import { db } from "../../../db/connection";
 import * as schema from "../../../db/schema";
 import { config } from "../../../config";
+import { getRedisConnection } from "../../../services/queue-service";
 
 const DOCX_FIXTURE_BASE64 =
   "UEsDBBQAAAAIAKtlbVzXeYTq8QAAALgBAAATAAAAW0NvbnRlbnRfVHlwZXNdLnhtbH2QzU7DMBCE730Ky9cqccoBIZSkB36OwKE8wMreJFb9J69b2rdn00KREOVozXwz62nXB+/EHjPZGDq5qhspMOhobBg7+b55ru6koALBgIsBO3lEkut+0W6OCUkwHKiTUynpXinSE3qgOiYMrAwxeyj8zKNKoLcworppmlulYygYSlXmDNkvhGgfcYCdK+LpwMr5loyOpHg4e+e6TkJKzmoorKt9ML+Kqq+SmsmThyabaMkGqa6VzOL1jh/0lSfK1qB4g1xewLNRfcRslIl65xmu/0/649o4DFbjhZ/TUo4aiXh77+qL4sGG71+06jR8/wlQSwMEFAAAAAgAq2VtXCAbhuqyAAAALgEAAAsAAABfcmVscy8ucmVsc43Puw6CMBQG4J2naM4uBQdjDIXFmLAafICmPZRGeklbL7y9HRzEODie23fyN93TzOSOIWpnGdRlBQStcFJbxeAynDZ7IDFxK/nsLDJYMELXFs0ZZ57yTZy0jyQjNjKYUvIHSqOY0PBYOo82T0YXDE+5DIp6Lq5cId1W1Y6GTwPagpAVS3rJIPSyBjIsHv/h3ThqgUcnbgZt+vHlayPLPChMDB4uSCrf7TKzQHNKuorZvgBQSwMEFAAAAAgAq2VtXCCNfXOwAAAA7AAAABEAAAB3b3JkL2RvY3VtZW50LnhtbDWOMQvCMBCFd3/FkV1THURKGwfFVQcF19icWmjuQi5a/fcmBZeP93jw3TXbjx/gjVF6plYtF5UCpI5dT49WXc6H+UaBJEvODkzYqi+K2ppZM9aOu5dHSpANJPXYqmdKodZauid6KwsOSHm7c/Q25RofeuToQuQORfIBP+hVVa21tz0pMwPI1hu7b4lTCSYjFiRzslEQ9sfdFS5hYOvgjJIaXbbCODFMGv33lPT/0/wAUEsBAhQDFAAAAAgAq2VtXNd5hOrxAAAAuAEAABMAAAAAAAAAAAAAAIABAAAAAFtDb250ZW50X1R5cGVzXS54bWxQSwECFAMUAAAACACrZW1cIBuG6rIAAAAuAQAACwAAAAAAAAAAAAAAgAEiAQAAX3JlbHMvLnJlbHNQSwECFAMUAAAACACrZW1cII19c7AAAADsAAAAEQAAAAAAAAAAAAAAgAH9AQAAd29yZC9kb2N1bWVudC54bWxQSwUGAAAAAAMAAwC5AAAA3AIAAAAA";
@@ -38,6 +39,11 @@ const originalParseUploadStorageDriver = config.PARSE_UPLOAD_STORAGE_DRIVER;
 const originalEnv = config.ENV;
 const parseUploadRefTestRequired =
   process.env.PARSE_UPLOAD_REF_TEST_REQUIRED === "true";
+const parseUploadUnparsedWindowMs = 24 * 60 * 60 * 1000;
+
+function getUnparsedUploadRefsKey(teamId: string) {
+  return `parse-upload-refs:${teamId}`;
+}
 
 function enableLocalUploadRefAdapter() {
   (config as any).ENV = "test";
@@ -73,6 +79,33 @@ async function mintUploadRef(
   }
 
   expect(init.statusCode).toBe(200);
+  expect(init.body.success).toBe(true);
+  expect(init.body.data.uploadRef).toEqual(expect.any(String));
+  return init.body.data as {
+    uploadRef: string;
+    uploadUrl: string;
+    method: string;
+    headers?: Record<string, string>;
+    fields?: Record<string, string>;
+    maxSizeBytes: number;
+  };
+}
+
+async function mintRequiredUploadRef(
+  owner: Identity,
+  filename = "upload-ref.html",
+  contentType = "text/html",
+) {
+  const init = await request(TEST_API_URL)
+    .post("/v2/parse/upload-url")
+    .set("Authorization", `Bearer ${owner.apiKey}`)
+    .set("Content-Type", "application/json")
+    .send({
+      filename,
+      contentType,
+    });
+
+  expect(init.statusCode, JSON.stringify(init.body)).toBe(200);
   expect(init.body.success).toBe(true);
   expect(init.body.data.uploadRef).toEqual(expect.any(String));
   return init.body.data as {
@@ -257,6 +290,83 @@ describe("/v2/parse", () => {
 
       expect(failure.statusCode).toBe(400);
       expect(failure.body.success).toBe(false);
+    },
+    scrapeTimeout,
+  );
+
+  it(
+    "limits each team to 10 unparsed upload refs from the last 24 hours",
+    async () => {
+      enableLocalUploadRefAdapter();
+
+      const capIdentity = await idmux({
+        name: `parse-upload-ref-cap-${Date.now()}`,
+        concurrency: 100,
+        credits: 1000000,
+      });
+      const key = getUnparsedUploadRefsKey(capIdentity.teamId);
+      await getRedisConnection().del(key);
+
+      const oldScore = Date.now() - parseUploadUnparsedWindowMs - 1000;
+      await getRedisConnection().zadd(
+        key,
+        ...Array.from({ length: 10 }).flatMap((_, i) => [oldScore, `old-${i}`]),
+      );
+
+      const first = await mintRequiredUploadRef(capIdentity, "cap-0.html");
+
+      const refs = [first];
+      for (let i = 1; i < 10; i++) {
+        const init = await mintRequiredUploadRef(capIdentity, `cap-${i}.html`);
+        refs.push(init);
+      }
+
+      const rejected = await request(TEST_API_URL)
+        .post("/v2/parse/upload-url")
+        .set("Authorization", `Bearer ${capIdentity.apiKey}`)
+        .set("Content-Type", "application/json")
+        .send({
+          filename: "cap-rejected.html",
+          contentType: "text/html",
+        });
+
+      expect(rejected.statusCode).toBe(429);
+      expect(rejected.body.success).toBe(false);
+      expect(rejected.body.code).toBe("PARSE_UPLOAD_UNPARSED_LIMIT_REACHED");
+
+      const upload = await uploadToMintedTarget(
+        refs[0],
+        htmlFixture,
+        "cap-0.html",
+      );
+      expect([200, 201, 204]).toContain(upload.status);
+
+      const parsed = await request(TEST_API_URL)
+        .post("/v2/parse")
+        .set("Authorization", `Bearer ${capIdentity.apiKey}`)
+        .set("Content-Type", "application/json")
+        .send({
+          uploadRef: refs[0].uploadRef,
+          formats: ["markdown"],
+        });
+
+      expect(parsed.statusCode, JSON.stringify(parsed.body)).toBe(200);
+      expect(parsed.body.success).toBe(true);
+
+      const acceptedAfterParse = await waitForSingleRow(async () => {
+        const init = await request(TEST_API_URL)
+          .post("/v2/parse/upload-url")
+          .set("Authorization", `Bearer ${capIdentity.apiKey}`)
+          .set("Content-Type", "application/json")
+          .send({
+            filename: "cap-accepted-after-parse.html",
+            contentType: "text/html",
+          });
+
+        return init.statusCode === 200 ? init : null;
+      });
+
+      expect(acceptedAfterParse?.body.success).toBe(true);
     },
     scrapeTimeout,
   );

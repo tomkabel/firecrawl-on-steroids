@@ -7,11 +7,15 @@ import { z } from "zod";
 import { config } from "../../config";
 import { logger as _logger } from "../../lib/logger";
 import { withSpan, setSpanAttributes } from "../../lib/otel-tracer";
+import { getRedisConnection } from "../../services/queue-service";
 import { RequestWithAuth, UploadedParseFile } from "./types";
 import { detectUploadedFileKind } from "./parse";
 
 const PARSE_UPLOAD_MAX_BYTES = 50 * 1024 * 1024;
 const PARSE_UPLOAD_TTL_MS = 10 * 60 * 1000;
+const PARSE_UPLOAD_UNPARSED_LIMIT = 10;
+const PARSE_UPLOAD_UNPARSED_WINDOW_MS = 24 * 60 * 60 * 1000;
+const PARSE_UPLOAD_UNPARSED_TTL_SECONDS = 25 * 60 * 60;
 const uploadInitSchema = z.strictObject({
   filename: z.string().min(1).max(512),
   contentType: z.string().min(1).max(255).optional(),
@@ -179,6 +183,76 @@ function makeObjectPath(
   return `parse-uploads/${teamId}/${uploadId}/${sanitizeFilename(filename)}`;
 }
 
+function getUnparsedUploadsKey(teamId: string) {
+  return `parse-upload-refs:${teamId}`;
+}
+
+async function reserveUnparsedUploadRef(teamId: string, uploadId: string) {
+  const now = Date.now();
+  const cutoff = now - PARSE_UPLOAD_UNPARSED_WINDOW_MS;
+  const result = await getRedisConnection().eval(
+    `
+      redis.call("ZREMRANGEBYSCORE", KEYS[1], "-inf", ARGV[1])
+      local count = redis.call("ZCARD", KEYS[1])
+      if count >= tonumber(ARGV[3]) then
+        redis.call("EXPIRE", KEYS[1], tonumber(ARGV[5]))
+        return count
+      end
+      redis.call("ZADD", KEYS[1], ARGV[2], ARGV[4])
+      redis.call("EXPIRE", KEYS[1], tonumber(ARGV[5]))
+      return -1
+    `,
+    1,
+    getUnparsedUploadsKey(teamId),
+    cutoff,
+    now,
+    PARSE_UPLOAD_UNPARSED_LIMIT,
+    uploadId,
+    PARSE_UPLOAD_UNPARSED_TTL_SECONDS,
+  );
+
+  if (Number(result) !== -1) {
+    throw new Error("PARSE_UPLOAD_UNPARSED_LIMIT_REACHED");
+  }
+}
+
+async function releaseUnparsedUploadRef(teamId: string, uploadId: string) {
+  const cutoff = Date.now() - PARSE_UPLOAD_UNPARSED_WINDOW_MS;
+  const key = getUnparsedUploadsKey(teamId);
+  await getRedisConnection()
+    .pipeline()
+    .zremrangebyscore(key, "-inf", cutoff)
+    .zrem(key, uploadId)
+    .expire(key, PARSE_UPLOAD_UNPARSED_TTL_SECONDS)
+    .exec();
+}
+
+async function reserveUnparsedUploadRefOrRespond(
+  res: Response,
+  teamId: string,
+  uploadId: string,
+) {
+  try {
+    await reserveUnparsedUploadRef(teamId, uploadId);
+    return false;
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      error.message === "PARSE_UPLOAD_UNPARSED_LIMIT_REACHED"
+    ) {
+      res.status(429).json({
+        success: false,
+        code: "PARSE_UPLOAD_UNPARSED_LIMIT_REACHED",
+        error:
+          "Too many unparsed uploads. Parse or wait for existing upload references before minting more.",
+      });
+      return true;
+    }
+
+    throw error;
+  }
+}
+
 export async function parseUploadUrlController(
   req: RequestWithAuth<{}, any, any>,
   res: Response,
@@ -269,6 +343,12 @@ export async function parseUploadUrlController(
         ],
       });
 
+      if (
+        await reserveUnparsedUploadRefOrRespond(res, req.auth.team_id, uploadId)
+      ) {
+        return;
+      }
+
       return res.status(200).json({
         success: true,
         data: {
@@ -281,6 +361,12 @@ export async function parseUploadUrlController(
           maxSizeBytes: PARSE_UPLOAD_MAX_BYTES,
         },
       });
+    }
+
+    if (
+      await reserveUnparsedUploadRefOrRespond(res, req.auth.team_id, uploadId)
+    ) {
+      return;
     }
 
     localUploads.set(uploadId, {
@@ -500,7 +586,10 @@ export async function parseUploadRefPayloadMiddleware(
       file: resolved.file,
     };
     res.once("finish", () => {
-      resolved.cleanup().catch(error => {
+      Promise.all([
+        resolved.cleanup(),
+        releaseUnparsedUploadRef(payload.teamId, payload.uploadId),
+      ]).catch(error => {
         _logger.warn("Failed to clean up parse upload", {
           error,
           uploadId: payload.uploadId,
