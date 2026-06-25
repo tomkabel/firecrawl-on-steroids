@@ -87,7 +87,10 @@ const assertSafeTargetUrl = async (urlString: string): Promise<void> => {
 
 const buildUpstreamProxyUrl = (): string | undefined => {
   if (!PROXY_SERVER) return undefined;
-  const url = new URL(PROXY_SERVER);
+  const server = PROXY_SERVER.includes('://')
+    ? PROXY_SERVER
+    : `http://${PROXY_SERVER}`;
+  const url = new URL(server);
   if (PROXY_USERNAME) url.username = PROXY_USERNAME;
   if (PROXY_PASSWORD) url.password = PROXY_PASSWORD;
   return url.toString();
