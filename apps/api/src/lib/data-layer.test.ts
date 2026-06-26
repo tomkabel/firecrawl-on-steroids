@@ -1,4 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { fetch } from "undici";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { config } from "../config";
 import {
@@ -8,9 +9,14 @@ import {
   getDataLayerResponseLogContext,
   getDataLayerSuccessCredits,
   isDataLayerSupportedUrl,
+  isSuccessfulDataLayerStatusCode,
   isSupportedDataLayerFormatRequest,
   setDataLayerCapabilitiesForTest,
 } from "./data-layer";
+
+vi.mock("undici", () => ({
+  fetch: vi.fn(),
+}));
 
 const originalConfig = {
   FIRE_ENGINE_BETA_URL: config.FIRE_ENGINE_BETA_URL,
@@ -18,6 +24,7 @@ const originalConfig = {
 
 describe("data layer routing", () => {
   beforeEach(() => {
+    vi.mocked(fetch).mockReset();
     config.FIRE_ENGINE_BETA_URL = "https://fire-engine.example";
     setDataLayerCapabilitiesForTest({
       domains: ["profiles.example"],
@@ -43,6 +50,23 @@ describe("data layer routing", () => {
       isDataLayerSupportedUrl("https://other.example/person/example-person"),
     ).resolves.toBe(false);
     await expect(isDataLayerSupportedUrl("not a url")).resolves.toBe(false);
+  });
+
+  it("caches failed Fire Engine capabilities lookups briefly", async () => {
+    clearDataLayerCapabilitiesForTest();
+    vi.mocked(fetch).mockResolvedValue({
+      ok: false,
+      status: 503,
+    } as Awaited<ReturnType<typeof fetch>>);
+
+    await expect(
+      isDataLayerSupportedUrl("https://profiles.example/person/example-person"),
+    ).resolves.toBe(false);
+    await expect(
+      isDataLayerSupportedUrl("https://profiles.example/person/example-person"),
+    ).resolves.toBe(false);
+
+    expect(fetch).toHaveBeenCalledTimes(1);
   });
 
   it("builds a compact request log context", () => {
@@ -152,10 +176,22 @@ describe("data layer routing", () => {
   });
 
   it("returns 15 credits only for successful handled responses", () => {
+    expect(isSuccessfulDataLayerStatusCode(200)).toBe(true);
+    expect(isSuccessfulDataLayerStatusCode(204)).toBe(true);
+    expect(isSuccessfulDataLayerStatusCode(304)).toBe(true);
+    expect(isSuccessfulDataLayerStatusCode(404)).toBe(false);
+
     expect(
       getDataLayerSuccessCredits({
         dataLayer: { handled: true, integrationId: "example" },
         statusCode: 200,
+      }),
+    ).toBe(15);
+
+    expect(
+      getDataLayerSuccessCredits({
+        dataLayer: { handled: true, integrationId: "example" },
+        statusCode: 304,
       }),
     ).toBe(15);
 

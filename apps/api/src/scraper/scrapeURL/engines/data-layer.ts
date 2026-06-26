@@ -5,6 +5,7 @@ import { EngineScrapeResult } from ".";
 import {
   getDataLayerRequestLogContext,
   getDataLayerResponseLogContext,
+  isSuccessfulDataLayerStatusCode,
 } from "../../../lib/data-layer";
 import { setSpanAttributes, withSpan } from "../../../lib/otel-tracer";
 import { robustFetch } from "../lib/fetch";
@@ -113,8 +114,8 @@ export async function scrapeURLWithDataLayer(
         response.result?.pageStatusCode ?? response.statusCode;
 
       if (
-        response.statusCode !== 200 ||
-        pageStatusCode !== 200 ||
+        !isSuccessfulDataLayerStatusCode(response.statusCode) ||
+        !isSuccessfulDataLayerStatusCode(pageStatusCode) ||
         !response.result
       ) {
         logger.warn("Data layer scrape failed", {

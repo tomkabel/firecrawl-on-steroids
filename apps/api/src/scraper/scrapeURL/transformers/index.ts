@@ -326,6 +326,13 @@ async function performLLMExtractUnlessNativeJson(
     document.json !== undefined &&
     hasFormatOfType(meta.options.formats, "json")
   ) {
+    if (
+      meta.internalOptions.v1OriginalFormat === "extract" &&
+      document.extract === undefined
+    ) {
+      document.extract = document.json;
+    }
+
     meta.logger.debug(
       "Skipping LLM JSON extraction - document already has native JSON",
     );

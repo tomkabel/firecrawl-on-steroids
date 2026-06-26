@@ -581,7 +581,8 @@ export async function buildFallbackList(meta: Meta): Promise<
   }[]
 > {
   if (
-    await canUseDataLayerForRequest({
+    !meta.internalOptions.agentIndexOnly &&
+    (await canUseDataLayerForRequest({
       url: meta.rewrittenUrl ?? meta.url,
       formats: meta.options.formats,
       actions: meta.options.actions,
@@ -594,7 +595,7 @@ export async function buildFallbackList(meta: Meta): Promise<
       zeroDataRetention: meta.internalOptions.zeroDataRetention,
       lockdown: meta.options.lockdown,
       flags: meta.internalOptions.teamFlags ?? null,
-    })
+    }))
   ) {
     return [
       {

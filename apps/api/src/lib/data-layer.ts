@@ -50,7 +50,7 @@ type DataLayerCapabilities = {
 let cachedCapabilities:
   | {
       expiresAt: number;
-      value: DataLayerCapabilities;
+      value: DataLayerCapabilities | null;
     }
   | undefined;
 let capabilitiesRequest: Promise<DataLayerCapabilities | null> | undefined;
@@ -121,12 +121,12 @@ async function getDataLayerCapabilities(): Promise<DataLayerCapabilities | null>
   }
 
   const capabilities = await capabilitiesRequest;
-  if (capabilities) {
-    cachedCapabilities = {
-      value: capabilities,
-      expiresAt: Date.now() + capabilities.ttlMs,
-    };
-  }
+  cachedCapabilities = {
+    value: capabilities,
+    expiresAt:
+      Date.now() +
+      (capabilities?.ttlMs ?? DATA_LAYER_CAPABILITIES_FALLBACK_TTL_MS),
+  };
 
   return capabilities;
 }
@@ -218,6 +218,10 @@ export function getDataLayerResponseLogContext(meta: unknown): {
   };
 }
 
+export function isSuccessfulDataLayerStatusCode(statusCode: number): boolean {
+  return (statusCode >= 200 && statusCode < 300) || statusCode === 304;
+}
+
 export function isSupportedDataLayerFormatRequest(
   formats?: FormatObject[] | unknown[],
 ): boolean {
@@ -299,7 +303,7 @@ export function getDataLayerSuccessCredits(input: {
   if (
     statusCode === undefined ||
     statusCode === null ||
-    !((statusCode >= 200 && statusCode < 300) || statusCode === 304)
+    !isSuccessfulDataLayerStatusCode(statusCode)
   ) {
     return null;
   }
