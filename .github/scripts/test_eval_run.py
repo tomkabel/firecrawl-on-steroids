@@ -40,7 +40,7 @@ class EvalRunTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(len(calls), 2)
-        self.assertEqual(sleeps, [eval_run.BACKOFF_SECONDS[0]])
+        self.assertEqual(sleeps, [eval_run.RETRY_BACKOFF_SECONDS[0]])
         self.assertEqual(calls[0][0][0], "https://eval.example/run")
         self.assertEqual(calls[0][1]["timeout"], eval_run.REQUEST_TIMEOUT_SECONDS)
 
@@ -54,7 +54,7 @@ class EvalRunTests(unittest.TestCase):
         with self.assertRaises(requests.exceptions.ConnectionError):
             eval_run.post_eval_run(self.args(), post=post, sleep=lambda _: None)
 
-        self.assertEqual(len(calls), eval_run.MAX_ATTEMPTS)
+        self.assertEqual(len(calls), len(eval_run.RETRY_BACKOFF_SECONDS) + 1)
 
     def test_http_error_is_not_retried(self):
         calls = []
@@ -67,6 +67,18 @@ class EvalRunTests(unittest.TestCase):
 
         with self.assertRaises(requests.exceptions.HTTPError):
             response.raise_for_status()
+
+        self.assertEqual(len(calls), 1)
+
+    def test_timeout_is_not_retried(self):
+        calls = []
+
+        def post(*args, **kwargs):
+            calls.append((args, kwargs))
+            raise requests.exceptions.Timeout("request timed out")
+
+        with self.assertRaises(requests.exceptions.Timeout):
+            eval_run.post_eval_run(self.args(), post=post, sleep=lambda _: None)
 
         self.assertEqual(len(calls), 1)
 

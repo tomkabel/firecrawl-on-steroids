@@ -3,15 +3,15 @@ import argparse
 import sys
 import time
 
-MAX_ATTEMPTS = 3
-BACKOFF_SECONDS = (5, 15)
+RETRY_BACKOFF_SECONDS = (5, 15)
 REQUEST_TIMEOUT_SECONDS = 30
 
 
 def post_eval_run(args, post=requests.post, sleep=time.sleep):
     last_error = None
+    max_attempts = len(RETRY_BACKOFF_SECONDS) + 1
 
-    for attempt in range(1, MAX_ATTEMPTS + 1):
+    for attempt in range(1, max_attempts + 1):
         try:
             return post(
                 f"{args.api_url}/run",
@@ -25,14 +25,14 @@ def post_eval_run(args, post=requests.post, sleep=time.sleep):
                 },
                 timeout=REQUEST_TIMEOUT_SECONDS,
             )
-        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
+        except requests.exceptions.ConnectionError as e:
             last_error = e
-            if attempt == MAX_ATTEMPTS:
+            if attempt == max_attempts:
                 break
 
-            delay = BACKOFF_SECONDS[attempt - 1]
+            delay = RETRY_BACKOFF_SECONDS[attempt - 1]
             print(
-                f"Eval API request failed on attempt {attempt}/{MAX_ATTEMPTS}: {e}. "
+                f"Eval API request failed on attempt {attempt}/{max_attempts}: {e}. "
                 f"Retrying in {delay}s...",
                 file=sys.stderr,
             )
