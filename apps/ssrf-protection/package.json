@@ -1,12 +1,11 @@
 {
   "name": "@firecrawl/ssrf-protection",
   "version": "1.0.0",
-  "description": "Shared SSRF protection for Firecrawl rendering adapters",
+  "private": true,
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "scripts": {
-    "build": "tsc",
-    "test": "jest"
+    "build": "tsc"
   },
   "dependencies": {
     "ipaddr.js": "^2.3.0"

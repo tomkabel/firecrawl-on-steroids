@@ -1,12 +1,23 @@
 import { lookup } from 'dns/promises';
 import IPAddr from 'ipaddr.js';
 
-const ALLOW_LOCAL_WEBHOOKS = (process.env.ALLOW_LOCAL_WEBHOOKS || 'False').toUpperCase() === 'TRUE';
-const DNS_CACHE_TTL_MS = parseInt(process.env.DNS_CACHE_TTL_MS || '30000', 10);
-const dnsLookupCache = new Map<string, { addresses: string[]; expiresAt: number }>();
+const ALLOW_LOCAL_WEBHOOKS =
+  (process.env.ALLOW_LOCAL_WEBHOOKS || 'False').toUpperCase() === 'TRUE';
+const DNS_CACHE_TTL_MS = Number.parseInt(
+  process.env.DNS_CACHE_TTL_MS || '30000',
+  10,
+);
+
+const dnsLookupCache = new Map<
+  string,
+  { addresses: string[]; expiresAt: number }
+>();
 
 export class InsecureConnectionError extends Error {
-  constructor(public readonly blockedUrl: string, reason: string) {
+  constructor(
+    public readonly blockedUrl: string,
+    reason: string,
+  ) {
     super(`Blocked insecure target URL "${blockedUrl}": ${reason}`);
     this.name = 'InsecureConnectionError';
   }
@@ -33,7 +44,10 @@ export const lookupWithCache = async (hostname: string): Promise<string[]> => {
     return cached.addresses;
   }
 
-  const resolvedAddresses = await lookup(hostname, { all: true, verbatim: true });
+  const resolvedAddresses = await lookup(hostname, {
+    all: true,
+    verbatim: true,
+  });
   const uniqueAddresses = [...new Set(resolvedAddresses.map(x => x.address))];
   dnsLookupCache.set(hostname, {
     addresses: uniqueAddresses,
@@ -42,7 +56,9 @@ export const lookupWithCache = async (hostname: string): Promise<string[]> => {
   return uniqueAddresses;
 };
 
-export const assertSafeTargetUrl = async (urlString: string): Promise<void> => {
+export const assertSafeTargetUrl = async (
+  urlString: string,
+): Promise<void> => {
   let parsedUrl: URL;
   try {
     parsedUrl = new URL(urlString);
@@ -51,7 +67,10 @@ export const assertSafeTargetUrl = async (urlString: string): Promise<void> => {
   }
 
   if (!isHttpProtocol(parsedUrl.protocol)) {
-    throw new InsecureConnectionError(urlString, `unsupported protocol "${parsedUrl.protocol}"`);
+    throw new InsecureConnectionError(
+      urlString,
+      `unsupported protocol "${parsedUrl.protocol}"`,
+    );
   }
 
   if (ALLOW_LOCAL_WEBHOOKS) {
@@ -64,12 +83,18 @@ export const assertSafeTargetUrl = async (urlString: string): Promise<void> => {
   }
 
   if (isLocalHostname(hostname)) {
-    throw new InsecureConnectionError(urlString, 'localhost targets are not allowed');
+    throw new InsecureConnectionError(
+      urlString,
+      'localhost targets are not allowed',
+    );
   }
 
   if (IPAddr.isValid(hostname)) {
     if (isIPPrivate(hostname)) {
-      throw new InsecureConnectionError(urlString, `private IP "${hostname}" is not allowed`);
+      throw new InsecureConnectionError(
+        urlString,
+        `private IP "${hostname}" is not allowed`,
+      );
     }
     return;
   }
@@ -92,6 +117,9 @@ export const assertSafeTargetUrl = async (urlString: string): Promise<void> => {
   }
 
   if (resolvedAddresses.some(address => isIPPrivate(address))) {
-    throw new InsecureConnectionError(urlString, `hostname "${hostname}" resolves to a private IP`);
+    throw new InsecureConnectionError(
+      urlString,
+      `hostname "${hostname}" resolves to a private IP`,
+    );
   }
 };
