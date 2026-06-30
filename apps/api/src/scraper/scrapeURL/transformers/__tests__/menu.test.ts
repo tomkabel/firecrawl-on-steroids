@@ -190,6 +190,51 @@ describe("fetchMenu", () => {
     expect(out.actions!.javascriptReturns).toEqual([]);
   });
 
+  it("forwards captured modifier payloads from the second supported source", async () => {
+    config.MENU_EXTRACTION_SERVICE_URL = "https://menu.internal";
+    const menu = {
+      isMenu: true,
+      confidence: 0.9,
+      merchant: { name: "Test Diner" },
+      sections: [],
+      sourceUrl: "https://shop.test/store/x/1/",
+    };
+    const fetchSpy = vi.fn(async (_url: string, _init?: RequestInit) => ({
+      ok: true,
+      json: async () => ({ menu }),
+    }));
+    global.fetch = fetchSpy as any;
+    const document: any = {
+      rawHtml: "<html>store</html>",
+      metadata: { url: "https://shop.test/store/x/1/" },
+      actions: {
+        javascriptReturns: [
+          {
+            type: "menu-modifiers",
+            value: {
+              source: "doordash",
+              items: { "7791942784": { itemHeader: {}, optionLists: [] } },
+            },
+          },
+        ],
+      },
+    };
+
+    const out = await fetchMenu(
+      baseMeta([{ type: "menu", modifiers: true }]),
+      document,
+    );
+
+    expect(out.menu).toEqual(menu);
+    const [, init] = fetchSpy.mock.calls[0];
+    const body = JSON.parse(init!.body as string);
+    expect(body.modifierPayloads).toEqual({
+      source: "doordash",
+      items: { "7791942784": { itemHeader: {}, optionLists: [] } },
+    });
+    expect(out.actions!.javascriptReturns).toEqual([]);
+  });
+
   it("omits modifierPayloads when modifiers requested but capture is missing/malformed", async () => {
     config.MENU_EXTRACTION_SERVICE_URL = "https://menu.internal";
     const fetchSpy = vi.fn(async (_url: string, _init?: RequestInit) => ({
