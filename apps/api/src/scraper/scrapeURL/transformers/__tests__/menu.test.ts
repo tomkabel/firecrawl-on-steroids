@@ -144,6 +144,134 @@ describe("fetchMenu", () => {
     expect(document.warning).toBeUndefined();
   });
 
+  it("forwards captured modifier payloads when modifiers is opted in", async () => {
+    config.MENU_EXTRACTION_SERVICE_URL = "https://menu.internal";
+    const menu = {
+      isMenu: true,
+      confidence: 0.9,
+      merchant: { name: "Test Diner" },
+      sections: [],
+      sourceUrl: "https://shop.test/store/x",
+    };
+    const fetchSpy = vi.fn(async (_url: string, _init?: RequestInit) => ({
+      ok: true,
+      json: async () => ({ menu }),
+    }));
+    global.fetch = fetchSpy as any;
+    const document: any = {
+      rawHtml: "<html>store</html>",
+      metadata: { url: "https://shop.test/store/x" },
+      actions: {
+        javascriptReturns: [
+          {
+            type: "menu-modifiers",
+            value: {
+              source: "ubereats",
+              items: { "10596957461": { data: { itemPage: {} } } },
+            },
+          },
+        ],
+      },
+    };
+
+    const out = await fetchMenu(
+      baseMeta([{ type: "menu", modifiers: true }]),
+      document,
+    );
+
+    expect(out.menu).toEqual(menu);
+    const [, init] = fetchSpy.mock.calls[0];
+    const body = JSON.parse(init!.body as string);
+    expect(body.modifierPayloads).toEqual({
+      source: "ubereats",
+      items: { "10596957461": { data: { itemPage: {} } } },
+    });
+    // The internal capture return is spliced out so raw payloads don't leak to the user.
+    expect(out.actions!.javascriptReturns).toEqual([]);
+  });
+
+  it("omits modifierPayloads when modifiers requested but capture is missing/malformed", async () => {
+    config.MENU_EXTRACTION_SERVICE_URL = "https://menu.internal";
+    const fetchSpy = vi.fn(async (_url: string, _init?: RequestInit) => ({
+      ok: true,
+      json: async () => ({ menu: null }),
+    }));
+    global.fetch = fetchSpy as any;
+    const document: any = {
+      rawHtml: "<html></html>",
+      metadata: { url: "https://shop.test/store/x" },
+      // capture action returned an error envelope (no items map) -> treated as absent
+      actions: {
+        javascriptReturns: [
+          {
+            type: "menu-modifiers",
+            value: { source: "ubereats", error: "boom" },
+          },
+        ],
+      },
+    };
+
+    await fetchMenu(baseMeta([{ type: "menu", modifiers: true }]), document);
+
+    const [, init] = fetchSpy.mock.calls[0];
+    const body = JSON.parse(init!.body as string);
+    expect(body.modifierPayloads).toBeUndefined();
+    expect("modifierPayloads" in body).toBe(false);
+  });
+
+  it("rejects an array `items` payload (typeof [] === 'object')", async () => {
+    config.MENU_EXTRACTION_SERVICE_URL = "https://menu.internal";
+    const fetchSpy = vi.fn(async (_url: string, _init?: RequestInit) => ({
+      ok: true,
+      json: async () => ({ menu: null }),
+    }));
+    global.fetch = fetchSpy as any;
+    const document: any = {
+      rawHtml: "<html></html>",
+      metadata: { url: "https://shop.test/store/x" },
+      // `items` as an array is malformed; it must not be forwarded to the service.
+      actions: {
+        javascriptReturns: [
+          { type: "menu-modifiers", value: { source: "ubereats", items: [] } },
+        ],
+      },
+    };
+
+    await fetchMenu(baseMeta([{ type: "menu", modifiers: true }]), document);
+
+    const [, init] = fetchSpy.mock.calls[0];
+    const body = JSON.parse(init!.body as string);
+    expect(body.modifierPayloads).toBeUndefined();
+  });
+
+  it("does not forward modifier payloads when modifiers is not opted in", async () => {
+    config.MENU_EXTRACTION_SERVICE_URL = "https://menu.internal";
+    const fetchSpy = vi.fn(async (_url: string, _init?: RequestInit) => ({
+      ok: true,
+      json: async () => ({ menu: null }),
+    }));
+    global.fetch = fetchSpy as any;
+    const document: any = {
+      rawHtml: "<html></html>",
+      metadata: { url: "https://shop.test/store/x" },
+      // even if a capture somehow exists, plain `menu` must not forward it
+      actions: {
+        javascriptReturns: [
+          {
+            type: "menu-modifiers",
+            value: { source: "ubereats", items: { a: {} } },
+          },
+        ],
+      },
+    };
+
+    await fetchMenu(baseMeta([{ type: "menu" }]), document);
+
+    const [, init] = fetchSpy.mock.calls[0];
+    const body = JSON.parse(init!.body as string);
+    expect(body.modifierPayloads).toBeUndefined();
+  });
+
   it("early-returns when the menu format isn't requested", async () => {
     const fetchSpy = vi.fn();
     global.fetch = fetchSpy as any;
