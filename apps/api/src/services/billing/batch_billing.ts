@@ -380,10 +380,6 @@ async function supaBillTeam(
       _logger.warn("Failed to add team to billed_teams set", { err, team_id });
     });
 
-  // Autumn is the source of truth for credit balances now; the cached ACUC
-  // credit fields (credits_used / adjusted_credits_used / remaining_credits)
-  // are zeroed out and no longer read, so there is nothing to write back here.
-
   return { success: true, data };
 }
 
