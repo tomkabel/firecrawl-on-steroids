@@ -35,7 +35,10 @@ export function escapeSlackText(input: string): string {
 }
 
 export function slackLink(url: string, label?: string): string {
-  const safeUrl = url.replace(/[<>]/g, "");
+  // Strip the angle brackets that delimit a link, and percent-encode the pipe:
+  // inside `<...>` Slack treats the first `|` as the URL/label separator, so an
+  // unescaped `|` in a user-controlled URL can spoof the displayed link text.
+  const safeUrl = url.replace(/[<>]/g, "").replace(/\|/g, "%7C");
   if (!label) return `<${safeUrl}>`;
   return `<${safeUrl}|${escapeSlackText(label)}>`;
 }

@@ -3,7 +3,7 @@ import { describe, it, expect, afterEach } from "vitest";
 import { config } from "../../../config";
 import { encryptSlackToken, decryptSlackToken } from "./crypto";
 import { verifySlackSignature } from "./signature";
-import { buildMonitorAlertMessage, escapeSlackText } from "./messages";
+import { buildMonitorAlertMessage, escapeSlackText, slackLink } from "./messages";
 import { sanitizeRedirectPath } from "./redirect";
 
 const ORIGINAL_ENCRYPTION_KEY = config.SLACK_TOKEN_ENCRYPTION_KEY;
@@ -117,6 +117,26 @@ describe("slack signature verification", () => {
   });
 });
 
+describe("slack link escaping", () => {
+  it("percent-encodes the pipe so a URL can't spoof the display label", () => {
+    // Without encoding, Slack would render this as a link to external.example labeled
+    // "firecrawl.dev".
+    expect(slackLink("https://external.example?x=y|firecrawl.dev")).toBe(
+      "<https://external.example?x=y%7Cfirecrawl.dev>",
+    );
+  });
+
+  it("strips angle brackets from the URL", () => {
+    expect(slackLink("https://x.com/<a>")).toBe("<https://x.com/a>");
+  });
+
+  it("preserves the real separator for an explicit label while neutralizing URL pipes", () => {
+    expect(slackLink("https://external.example?x=y|z", "Homepage")).toBe(
+      "<https://external.example?x=y%7Cz|Homepage>",
+    );
+  });
+});
+
 describe("slack message builder", () => {
   it("escapes Slack mrkdwn control characters", () => {
     expect(escapeSlackText("a & b < c > d")).toBe("a &amp; b &lt; c &gt; d");
@@ -194,12 +214,12 @@ describe("slack redirect sanitization", () => {
 
   it("blocks open-redirect vectors", () => {
     const vectors = [
-      "//evil.com",
-      "/\\evil.com", // "/\evil.com" — URL parser rewrites \ to / for http(s)
-      "/\\/evil.com",
-      "https://evil.com",
-      "/\t/evil.com",
-      "/\n//evil.com",
+      "//external.example",
+      "/\\external.example", // "/\external.example" — URL parser rewrites \ to / for http(s)
+      "/\\/external.example",
+      "https://external.example",
+      "/\t/external.example",
+      "/\n//external.example",
     ];
     for (const vector of vectors) {
       expect(sanitizeRedirectPath(vector)).toBe("/app/monitoring");
