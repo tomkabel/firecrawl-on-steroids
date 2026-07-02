@@ -1,19 +1,23 @@
 name: firecrawl
 
-x-common-service: &common-service
-  # NOTE: If you don't want to build the service locally,
-  # comment out the build: statement and uncomment the image: statement
-  # image: ghcr.io/firecrawl/firecrawl
-  build: apps/api
+networks:
+  firecrawl-net:
+    driver: bridge
 
+x-postgres-defaults: &postgres-defaults
+  POSTGRES_USER: "${POSTGRES_USER:-firecrawl}"
+  POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-firecrawl_password}"
+  # Must be "postgres" — the nuq-postgres image hardcodes pg_cron's cron.database_name to 'postgres'
+  POSTGRES_DB: "${POSTGRES_DB:-postgres}"
+
+x-common-service: &common-service
+  image: ghcr.io/firecrawl/firecrawl
+  networks:
+    - firecrawl-net
   ulimits:
     nofile:
       soft: 65535
       hard: 65535
-  networks:
-    - backend
-  extra_hosts:
-    - "host.docker.internal:host-gateway"
   logging:
     driver: "json-file"
     options:
@@ -23,13 +27,13 @@ x-common-service: &common-service
 
 x-common-env: &common-env
   REDIS_URL: ${REDIS_URL:-redis://redis:6379}
-  REDIS_RATE_LIMIT_URL: ${REDIS_URL:-redis://redis:6379}
+  REDIS_RATE_LIMIT_URL: ${REDIS_RATE_LIMIT_URL:-redis://redis:6379}
   PLAYWRIGHT_MICROSERVICE_URL: ${PLAYWRIGHT_MICROSERVICE_URL:-http://playwright-service:3000/scrape}
-  POSTGRES_USER: ${POSTGRES_USER:-postgres}
-  POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-postgres}"
-  POSTGRES_DB: ${POSTGRES_DB:-postgres}
   POSTGRES_HOST: ${POSTGRES_HOST:-nuq-postgres}
   POSTGRES_PORT: ${POSTGRES_PORT:-5432}
+  POSTGRES_USER: ${POSTGRES_USER:-firecrawl}
+  POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-firecrawl_password}"
+  POSTGRES_DB: ${POSTGRES_DB:-postgres}
   USE_DB_AUTHENTICATION: ${USE_DB_AUTHENTICATION:-false}
   NUM_WORKERS_PER_QUEUE: ${NUM_WORKERS_PER_QUEUE:-8}
   CRAWL_CONCURRENT_REQUESTS: ${CRAWL_CONCURRENT_REQUESTS:-10}
@@ -61,10 +65,11 @@ x-common-env: &common-env
 
 services:
   playwright-service:
-    # NOTE: If you don't want to build the service locally,
-    # comment out the build: statement and uncomment the image: statement
-    # image: ghcr.io/firecrawl/playwright-service:latest
-    build: apps/playwright-service-ts
+    image: ghcr.io/firecrawl/playwright-service:latest
+    networks:
+      - firecrawl-net
+    ports:
+      - "127.0.0.1:${PLAYWRIGHT_HOST_PORT:-3000}:3000"
     environment:
       PORT: 3000
       PROXY_SERVER: ${PROXY_SERVER}
@@ -74,8 +79,6 @@ services:
       BLOCK_MEDIA: ${BLOCK_MEDIA}
       # Configure maximum concurrent pages for Playwright browser instances
       MAX_CONCURRENT_PAGES: ${CRAWL_CONCURRENT_REQUESTS:-10}
-    networks:
-      - backend
     # Resource limits for Docker Compose (not Swarm)
     cpus: 2.0
     mem_limit: 4G
@@ -97,7 +100,9 @@ services:
       PORT: ${INTERNAL_PORT:-3002}
       EXTRACT_WORKER_PORT: ${EXTRACT_WORKER_PORT:-3004}
       WORKER_PORT: ${WORKER_PORT:-3005}
-      NUQ_RABBITMQ_URL: amqp://rabbitmq:5672
+      NUQ_DATABASE_URL: ${NUQ_DATABASE_URL:-postgresql://firecrawl:firecrawl_password@nuq-postgres:5432/postgres}
+      NUQ_DATABASE_URL_LISTEN: ${NUQ_DATABASE_URL_LISTEN:-postgresql://firecrawl:firecrawl_password@nuq-postgres:5432/postgres}
+      NUQ_RABBITMQ_URL: ${NUQ_RABBITMQ_URL:-amqp://rabbitmq:5672}
       HARNESS_STARTUP_TIMEOUT_MS: ${HARNESS_STARTUP_TIMEOUT_MS:-60000}
       ENV: local
     depends_on:
@@ -107,6 +112,8 @@ services:
         condition: service_started
       rabbitmq:
         condition: service_healthy
+      nuq-postgres:
+        condition: service_started
     ports:
       - "${PORT:-3002}:${INTERNAL_PORT:-3002}"
     volumes:
@@ -124,9 +131,10 @@ services:
     # Using Valkey with Firecrawl is untested and not guaranteed to work. Use with caution.
     image: redis:alpine
     # image: valkey/valkey:alpine
-
     networks:
-      - backend
+      - firecrawl-net
+    ports:
+      - "127.0.0.1:${REDIS_HOST_PORT:-6379}:6379"
     command: redis-server --bind 0.0.0.0
     logging:
       driver: "json-file"
@@ -138,8 +146,16 @@ services:
   rabbitmq:
     image: rabbitmq:3-management
     networks:
-      - backend
+      - firecrawl-net
+    ports:
+      - "127.0.0.1:${RABBITMQ_AMQP_HOST_PORT:-5672}:5672"
+      - "127.0.0.1:${RABBITMQ_MGMT_HOST_PORT:-15672}:15672"
+    user: "0:0"
     command: rabbitmq-server
+    environment:
+      RABBITMQ_ERLANG_COOKIE: firecrawl-cookie-secret
+    volumes:
+      - firecrawl-rabbitmq-data:/var/lib/rabbitmq
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "-q", "check_running"]
       interval: 5s
@@ -154,16 +170,15 @@ services:
         compress: "true"
 
   nuq-postgres:
-    # NOTE: If you don't want to build the image locally,
-    # comment out the build: statement and uncomment the image: statement
-    # image: ghcr.io/firecrawl/nuq-postgres:latest
-    build: apps/nuq-postgres
-    environment:
-      POSTGRES_USER: ${POSTGRES_USER:-postgres}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
-      POSTGRES_DB: ${POSTGRES_DB:-postgres}
+    image: ghcr.io/firecrawl/nuq-postgres:latest
     networks:
-      - backend
+      - firecrawl-net
+    ports:
+      - "127.0.0.1:${PG_HOST_PORT:-5432}:5432"
+    environment:
+      <<: *postgres-defaults
+    tmpfs:
+      - /var/lib/postgresql/data:noexec,nosuid
     logging:
       driver: "json-file"
       options:
@@ -213,3 +228,4 @@ networks:
 volumes:
   fdb-data:
   fdb-cluster-file:
+  firecrawl-rabbitmq-data:

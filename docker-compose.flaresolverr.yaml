@@ -1,0 +1,55 @@
+# Firecrawl + FlareSolverr override — Cloudflare bypass for aggressive sites
+#
+# Usage:
+#   docker compose -f docker-compose.yaml -f docker-compose.flaresolverr.yaml up -d
+#
+# WARNING: FlareSolverr launches its own headless Chrome internally.
+# This adds ~2GB RAM at steady state. Only enable if you need Cloudflare
+# Turnstile / Challenge bypass. For normal sites, the existing Chromium
+# pipeline handles everything without this cost.
+#
+# FlareSolverr is NOT configured as a global proxy — it is only used when
+# the API receives a scrape request that triggers a CAPTCHA or 403 on the
+# primary pipeline. Data privacy note: pages routed through FlareSolverr
+# are rendered in a third-party Chrome instance.
+
+services:
+  flaresolverr:
+    image: ghcr.io/flaresolverr/flaresolverr@sha256:7962759d99d7e125e108e0f5e7f3cdbcd36161776d058d1d9b7153b92ef1af9e  # v3.4.6
+    networks:
+      - firecrawl-net
+    environment:
+      LOG_LEVEL: ${FLARESOLVERR_LOG_LEVEL:-info}
+      HEADLESS: true
+    cpus: 2.0
+    mem_limit: 2G
+    memswap_limit: 2G
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "2"
+        compress: "true"
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8191/v1 | grep -q 'FlareSolverr is ready' || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    restart: unless-stopped
+    volumes:
+      - flaresolverr-cache:/home/flaresolverr/.cache
+
+  playwright-service:
+    environment:
+      FLARESOLVERR_URL: ${FLARESOLVERR_URL:-http://flaresolverr:8191/v1}
+
+  api:
+    depends_on:
+      flaresolverr:
+        condition: service_healthy
+
+volumes:
+  flaresolverr-cache:

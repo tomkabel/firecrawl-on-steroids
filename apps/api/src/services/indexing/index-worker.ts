@@ -622,19 +622,21 @@ const workerFun = async (
     const canAcceptConnection = await monitor.acceptConnection();
 
     if (!canAcceptConnection) {
-      logger.info("Can't accept connection due to RAM/CPU load");
       cantAcceptConnectionCount++;
 
-      if (cantAcceptConnectionCount >= 25) {
+      if (cantAcceptConnectionCount === 25) {
         logger.error("WORKER STALLED", {
           cpuUsage: await monitor.checkCpuUsage(),
           memoryUsage: await monitor.checkMemoryUsage(),
         });
       }
 
-      await new Promise(resolve =>
-        setTimeout(resolve, cantAcceptConnectionInterval),
+      // Adaptive backoff: 2s → 4s → 8s → 16s → 30s max
+      const backoffMs = Math.min(
+        cantAcceptConnectionInterval * Math.pow(2, Math.min(cantAcceptConnectionCount - 1, 4)),
+        30000,
       );
+      await new Promise(resolve => setTimeout(resolve, backoffMs));
       continue;
     } else {
       cantAcceptConnectionCount = 0;

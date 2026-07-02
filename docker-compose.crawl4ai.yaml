@@ -1,0 +1,30 @@
+name: firecrawl
+
+services:
+  crawl4ai:
+    image: unclecode/crawl4ai@sha256:af229711cb673001cfdfdb148e1b1a0303d460efff890d0712cf2ca9da0838e8
+    networks:
+      - firecrawl-net
+    environment:
+      CRAWL4AI_HOOKS_ENABLED: "false"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:11235/health | grep -q ok || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "2"
+        compress: "true"
+    security_opt:
+      - no-new-privileges:true
+
+  api:
+    environment:
+      CRAWL4AI_URL: ${CRAWL4AI_URL:-http://crawl4ai:11235}
+    depends_on:
+      crawl4ai:
+        condition: service_healthy

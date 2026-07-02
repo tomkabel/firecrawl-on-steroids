@@ -1,0 +1,65 @@
+# Firecrawl + Anti-Bot override — specialized anti-detection renderers
+#
+# Usage:
+#   docker compose -f docker-compose.yaml -f docker-compose.antibot.yaml up -d
+#
+# This override adds anti-bot fallback services that are only invoked when
+# the primary scraping pipeline (playwright-service + Chromium) returns a
+# 403, CAPTCHA page, or empty content. These are fallback renderers, not
+# the primary path.
+#
+# Services:
+#   nodriver-adapter — Python/nodriver microservice for Turnstile bypass
+#   browser-use (opt-in) — AI-driven browser automation (sends content to
+#     OpenAI API — DO NOT enable for confidential/internal data)
+
+services:
+  nodriver-adapter:
+    build:
+      context: ./apps/nodriver-adapter
+      dockerfile: Dockerfile
+    image: firecrawl/nodriver-adapter:local
+    networks:
+      - firecrawl-net
+    environment:
+      PORT: "3000"
+      BROWSER_POOL_SIZE: ${NODRIVER_POOL_SIZE:-3}
+    cpus: 2.0
+    mem_limit: 2G
+    memswap_limit: 2G
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/health | grep -q healthy || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp:noexec,nosuid,size=256m
+    volumes:
+      - nodriver-cache:/home/app/.nodriver
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "2"
+        compress: "true"
+    restart: unless-stopped
+
+  playwright-service:
+    environment:
+      NODRIVER_ADAPTER_URL: ${NODRIVER_ADAPTER_URL:-http://nodriver-adapter:3000/scrape}
+
+  api:
+    environment:
+      NODRIVER_ADAPTER_URL: ${NODRIVER_ADAPTER_URL:-http://nodriver-adapter:3000/scrape}
+      STEALTH_BROWSER_URL: ${STEALTH_BROWSER_URL:-}
+      STEALTH_AUTH_TOKEN: ${STEALTH_AUTH_TOKEN:-}
+    depends_on:
+      nodriver-adapter:
+        condition: service_healthy
+
+volumes:
+  nodriver-cache:

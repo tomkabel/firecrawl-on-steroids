@@ -10,9 +10,12 @@ import {
 import dotenv from 'dotenv';
 import UserAgent from 'user-agents';
 import { getError } from './helpers/get_error';
-import { lookup } from 'dns/promises';
-import IPAddr from 'ipaddr.js';
 import { Server, RequestError } from 'proxy-chain';
+import {
+  assertSafeTargetUrl,
+  InsecureConnectionError,
+  normalizeHostname,
+} from '@firecrawl/ssrf-protection';
 
 dotenv.config();
 
@@ -34,55 +37,26 @@ const PROXY_SERVER = process.env.PROXY_SERVER || null;
 const PROXY_USERNAME = process.env.PROXY_USERNAME || null;
 const PROXY_PASSWORD = process.env.PROXY_PASSWORD || null;
 
-class InsecureConnectionError extends Error {
-  constructor(
-    public readonly blockedUrl: string,
-    reason: string,
-  ) {
-    super(`Blocked insecure target URL "${blockedUrl}": ${reason}`);
-    this.name = 'InsecureConnectionError';
-  }
+enum RenderBackend {
+  OBSCURA = 'obscura',
+  CHROMIUM = 'chromium',
 }
 
-const isInternalHost = async (hostname: string): Promise<boolean> => {
-  const host = hostname.toLowerCase().replace(/\.$/, '');
-  if (!host) return true;
+const RENDER_BACKEND_ORDER: RenderBackend[] =
+  (process.env.RENDER_BACKEND_ORDER || 'chromium')
+    .split(',')
+    .map(s => s.trim() as RenderBackend);
 
-  let addresses: string[];
-  if (IPAddr.isValid(host)) {
-    addresses = [host];
-  } else {
-    try {
-      addresses = (await lookup(host, { all: true })).map((a) => a.address);
-    } catch {
-      return true;
-    }
-  }
-  return (
-    addresses.length === 0 ||
-    addresses.some((a) => IPAddr.parse(a).range() !== 'unicast')
-  );
-};
+const OBSCURA_CDP_URL = process.env.OBSCURA_CDP_URL || null;
+const OBSCURA_CDP_SECRET = process.env.OBSCURA_CDP_SECRET || null;
 
-const assertSafeTargetUrl = async (urlString: string): Promise<void> => {
-  let parsedUrl: URL;
-  try {
-    parsedUrl = new URL(urlString);
-  } catch {
-    throw new InsecureConnectionError(urlString, 'URL is invalid');
-  }
-  if (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:') {
-    throw new InsecureConnectionError(
-      urlString,
-      `unsupported protocol "${parsedUrl.protocol}"`,
-    );
-  }
-  if (!ALLOW_LOCAL_WEBHOOKS && (await isInternalHost(parsedUrl.hostname))) {
-    throw new InsecureConnectionError(
-      urlString,
-      'resolves to a private/internal address',
-    );
-  }
+const assertSafeProxyHostname = async (hostname: string): Promise<void> => {
+  const normalizedHostname = normalizeHostname(hostname);
+  const urlHostname =
+    normalizedHostname.includes(':') && !normalizedHostname.startsWith('[')
+      ? `[${normalizedHostname}]`
+      : normalizedHostname;
+  await assertSafeTargetUrl(`http://${urlHostname}`);
 };
 
 const buildUpstreamProxyUrl = (): string | undefined => {
@@ -101,11 +75,15 @@ const startSSRFProxy = async (): Promise<number> => {
     port: 0,
     host: '127.0.0.1',
     prepareRequestFunction: async ({ hostname }) => {
-      if (!ALLOW_LOCAL_WEBHOOKS && (await isInternalHost(hostname))) {
-        throw new RequestError(
-          'Blocked: target resolves to a private/internal address',
-          403,
-        );
+      if (!ALLOW_LOCAL_WEBHOOKS) {
+        try {
+          await assertSafeProxyHostname(hostname);
+        } catch (error) {
+          if (error instanceof InsecureConnectionError) {
+            throw new RequestError(error.message, 403);
+          }
+          throw error;
+        }
       }
       return { upstreamProxyUrl: buildUpstreamProxyUrl() };
     },
@@ -184,10 +162,19 @@ interface UrlModel {
   skip_tls_verification?: boolean;
 }
 
-let browser: Browser;
+let obscuraBrowser: Browser | null = null;
+let chromiumBrowser: Browser | null = null;
 
-const initializeBrowser = async () => {
-  browser = await chromium.launch({
+async function connectObscura(): Promise<Browser> {
+  if (!OBSCURA_CDP_URL) throw new Error('OBSCURA_CDP_URL not set');
+  const wsUrl = OBSCURA_CDP_SECRET
+    ? `${OBSCURA_CDP_URL}?cdp-secret=${encodeURIComponent(OBSCURA_CDP_SECRET)}`
+    : OBSCURA_CDP_URL;
+  return chromium.connectOverCDP(wsUrl);
+}
+
+async function launchChromium(): Promise<Browser> {
+  return chromium.launch({
     headless: true,
     args: [
       '--no-sandbox',
@@ -199,15 +186,42 @@ const initializeBrowser = async () => {
       '--disable-gpu',
     ],
   });
+}
+
+async function getBrowserForScrape(): Promise<{ browser: Browser; backend: RenderBackend }> {
+  for (const backend of RENDER_BACKEND_ORDER) {
+    try {
+      if (backend === RenderBackend.OBSCURA) {
+        if (!obscuraBrowser) obscuraBrowser = await connectObscura();
+        return { browser: obscuraBrowser, backend: RenderBackend.OBSCURA };
+      }
+      if (backend === RenderBackend.CHROMIUM) {
+        if (!chromiumBrowser) chromiumBrowser = await launchChromium();
+        return { browser: chromiumBrowser, backend: RenderBackend.CHROMIUM };
+      }
+    } catch (err) {
+      console.warn(`Backend ${backend} unavailable:`, (err as Error).message);
+      continue;
+    }
+  }
+  throw new Error('No rendering backend available');
+}
+
+const initializeBrowser = async () => {
+  try {
+    const { browser, backend } = await getBrowserForScrape();
+    console.log(`Browser initialized using backend: ${backend}`);
+  } catch (err) {
+    console.error('Failed to initialize any browser backend:', (err as Error).message);
+    throw err;
+  }
 };
 
 const createContext = async (
+  browser: Browser,
   skipTlsVerification: boolean = false,
-  userAgentOverride?: string,
-): Promise<{
-  context: BrowserContext;
-  securityState: ContextSecurityState;
-}> => {
+  userAgentOverride?: string
+): Promise<{ context: BrowserContext; securityState: ContextSecurityState }> => {
   const userAgent = userAgentOverride || new UserAgent().toString();
   const viewport = { width: 1280, height: 800 };
   const securityState: ContextSecurityState = {
@@ -268,8 +282,13 @@ const createContext = async (
 };
 
 const shutdownBrowser = async () => {
-  if (browser) {
-    await browser.close();
+  if (chromiumBrowser) {
+    await chromiumBrowser.close();
+    chromiumBrowser = null;
+  }
+  if (obscuraBrowser) {
+    await obscuraBrowser.close();
+    obscuraBrowser = null;
   }
 };
 
@@ -346,17 +365,16 @@ const scrapePage = async (
 
 app.get('/health', async (req: Request, res: Response) => {
   try {
-    if (!browser) {
-      await initializeBrowser();
-    }
-
-    const { context: testContext } = await createContext();
+    const { browser, backend } = await getBrowserForScrape();
+    
+    const { context: testContext } = await createContext(browser);
     const testPage = await testContext.newPage();
     await testPage.close();
     await testContext.close();
 
     res.status(200).json({
       status: 'healthy',
+      backend,
       maxConcurrentPages: MAX_CONCURRENT_PAGES,
       activePages: MAX_CONCURRENT_PAGES - pageSemaphore.getAvailablePermits(),
     });
@@ -415,7 +433,7 @@ app.post('/scrape', async (req: Request, res: Response) => {
     );
   }
 
-  if (!browser) {
+  if (!chromiumBrowser && !obscuraBrowser) {
     await initializeBrowser();
   }
 
@@ -426,6 +444,8 @@ app.post('/scrape', async (req: Request, res: Response) => {
   let page: Page | null = null;
 
   try {
+    const { browser, backend } = await getBrowserForScrape();
+    
     // Extract user-agent from request headers (case-insensitive) so it can
     // be applied at the context level.  Playwright ignores user-agent in
     // setExtraHTTPHeaders when the context already defines one (#2802).
@@ -435,10 +455,7 @@ app.post('/scrape', async (req: Request, res: Response) => {
         )?.[1]
       : undefined;
 
-    const contextBundle = await createContext(
-      skip_tls_verification,
-      userAgentOverride,
-    );
+    const contextBundle = await createContext(browser, skip_tls_verification, userAgentOverride);
     requestContext = contextBundle.context;
     securityState = contextBundle.securityState;
     page = await requestContext.newPage();
@@ -526,11 +543,9 @@ app.post('/scrape', async (req: Request, res: Response) => {
       result.status !== 200 ? getError(result.status) : undefined;
 
     if (!pageError) {
-      console.log(`✅ Scrape successful!`);
+      console.log(`✅ Scrape successful! (backend: ${backend})`);
     } else {
-      console.log(
-        `🚨 Scrape failed with status code: ${result.status} ${pageError}`,
-      );
+      console.log(`🚨 Scrape failed with status code: ${result.status} ${pageError} (backend: ${backend})`);
     }
 
     res.json({
