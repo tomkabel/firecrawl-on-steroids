@@ -54,6 +54,21 @@ const cantAcceptConnectionInterval = config.CANT_ACCEPT_CONNECTION_INTERVAL;
 const connectionMonitorInterval = config.CONNECTION_MONITOR_INTERVAL;
 const gotJobInterval = config.CONNECTION_MONITOR_INTERVAL;
 
+// Sleep for `ms` but wake early if `shouldStop` becomes true, so the worker
+// loop can observe a shutdown signal instead of blocking for the full window.
+async function sleepInterruptible(
+  ms: number,
+  shouldStop: () => boolean,
+): Promise<void> {
+  const step = 250;
+  let remaining = ms;
+  while (remaining > 0 && !shouldStop()) {
+    const wait = Math.min(step, remaining);
+    await new Promise((resolve) => setTimeout(resolve, wait));
+    remaining -= wait;
+  }
+}
+
 const runningJobs: Set<string> = new Set();
 
 // Create a processor for billing jobs
@@ -643,19 +658,23 @@ const workerFun = async (
     const canAcceptConnection = await monitor.acceptConnection();
 
     if (!canAcceptConnection) {
-      logger.info("Can't accept connection due to RAM/CPU load");
       cantAcceptConnectionCount++;
 
-      if (cantAcceptConnectionCount >= 25) {
+      if (cantAcceptConnectionCount === 25) {
         logger.error("WORKER STALLED", {
           cpuUsage: await monitor.checkCpuUsage(),
           memoryUsage: await monitor.checkMemoryUsage(),
         });
       }
 
-      await new Promise(resolve =>
-        setTimeout(resolve, cantAcceptConnectionInterval),
+      // Adaptive backoff: 2s → 4s → 8s → 16s → 30s max. Sleep in small
+      // chunks so a shutdown signal is honored promptly instead of blocking
+      // for the full backoff window.
+      const backoffMs = Math.min(
+        cantAcceptConnectionInterval * Math.pow(2, Math.min(cantAcceptConnectionCount - 1, 4)),
+        30000,
       );
+      await sleepInterruptible(backoffMs, () => isShuttingDown);
       continue;
     } else {
       cantAcceptConnectionCount = 0;
@@ -675,9 +694,7 @@ const workerFun = async (
 
       await new Promise(resolve => setTimeout(resolve, gotJobInterval));
     } else {
-      await new Promise(resolve =>
-        setTimeout(resolve, connectionMonitorInterval),
-      );
+      await sleepInterruptible(connectionMonitorInterval, () => isShuttingDown);
     }
   }
 

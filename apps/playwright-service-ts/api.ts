@@ -10,9 +10,13 @@ import {
 import dotenv from 'dotenv';
 import UserAgent from 'user-agents';
 import { getError } from './helpers/get_error';
-import { lookup } from 'dns/promises';
-import IPAddr from 'ipaddr.js';
 import { Server, RequestError } from 'proxy-chain';
+import {
+  assertSafeTargetUrl,
+  createSafeDnsLookup,
+  InsecureConnectionError,
+  normalizeHostname,
+} from '@firecrawl/ssrf-protection';
 
 dotenv.config();
 
@@ -34,55 +38,56 @@ const PROXY_SERVER = process.env.PROXY_SERVER || null;
 const PROXY_USERNAME = process.env.PROXY_USERNAME || null;
 const PROXY_PASSWORD = process.env.PROXY_PASSWORD || null;
 
-class InsecureConnectionError extends Error {
-  constructor(
-    public readonly blockedUrl: string,
-    reason: string,
-  ) {
-    super(`Blocked insecure target URL "${blockedUrl}": ${reason}`);
-    this.name = 'InsecureConnectionError';
-  }
+// Optional FlareSolverr endpoint (set via the docker-compose.flaresolverr.yaml
+// override). When configured, it is used as an anti-bot fallback for requests
+// that return a Cloudflare-style challenge (403/429/503) on the primary
+// Playwright backend.
+const FLARESOLVERR_URL = process.env.FLARESOLVERR_URL || null;
+
+enum RenderBackend {
+  OBSCURA = 'obscura',
+  CHROMIUM = 'chromium',
 }
 
-const isInternalHost = async (hostname: string): Promise<boolean> => {
-  const host = hostname.toLowerCase().replace(/\.$/, '');
-  if (!host) return true;
+const KNOWN_RENDER_BACKENDS = new Set<string>(Object.values(RenderBackend));
 
-  let addresses: string[];
-  if (IPAddr.isValid(host)) {
-    addresses = [host];
-  } else {
-    try {
-      addresses = (await lookup(host, { all: true })).map((a) => a.address);
-    } catch {
-      return true;
+const RENDER_BACKEND_ORDER: RenderBackend[] = (
+  process.env.RENDER_BACKEND_ORDER || 'chromium'
+)
+  .split(',')
+  .map(s => s.trim())
+  .filter((value): value is RenderBackend => {
+    if (value === '') return false;
+    if (!KNOWN_RENDER_BACKENDS.has(value)) {
+      console.warn(
+        `⚠️ Ignoring unknown RENDER_BACKEND_ORDER value "${value}"`,
+      );
+      return false;
     }
-  }
-  return (
-    addresses.length === 0 ||
-    addresses.some((a) => IPAddr.parse(a).range() !== 'unicast')
-  );
-};
+    return true;
+  });
 
-const assertSafeTargetUrl = async (urlString: string): Promise<void> => {
-  let parsedUrl: URL;
-  try {
-    parsedUrl = new URL(urlString);
-  } catch {
-    throw new InsecureConnectionError(urlString, 'URL is invalid');
-  }
-  if (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:') {
-    throw new InsecureConnectionError(
-      urlString,
-      `unsupported protocol "${parsedUrl.protocol}"`,
-    );
-  }
-  if (!ALLOW_LOCAL_WEBHOOKS && (await isInternalHost(parsedUrl.hostname))) {
-    throw new InsecureConnectionError(
-      urlString,
-      'resolves to a private/internal address',
-    );
-  }
+// Every value was empty or unrecognized: rather than fail on every single
+// scrape with an opaque "No rendering backend available", fail fast and loudly
+// at startup so a bad RENDER_BACKEND_ORDER config is caught immediately.
+if (RENDER_BACKEND_ORDER.length === 0) {
+  const configured = process.env.RENDER_BACKEND_ORDER || '(unset)';
+  throw new Error(
+    `RENDER_BACKEND_ORDER resolved to zero valid backends (got "${configured}"). ` +
+      `Must include at least one of: ${[...KNOWN_RENDER_BACKENDS].join(', ')}`,
+  );
+}
+
+const OBSCURA_CDP_URL = process.env.OBSCURA_CDP_URL || null;
+const OBSCURA_CDP_SECRET = process.env.OBSCURA_CDP_SECRET || null;
+
+const assertSafeProxyHostname = async (hostname: string): Promise<void> => {
+  const normalizedHostname = normalizeHostname(hostname);
+  const urlHostname =
+    normalizedHostname.includes(':') && !normalizedHostname.startsWith('[')
+      ? `[${normalizedHostname}]`
+      : normalizedHostname;
+  await assertSafeTargetUrl(`http://${urlHostname}`);
 };
 
 const buildUpstreamProxyUrl = (): string | undefined => {
@@ -96,18 +101,35 @@ const buildUpstreamProxyUrl = (): string | undefined => {
   return url.toString();
 };
 
+// Connect-time DNS lookup that pins and re-validates the resolved IP, closing
+// the DNS-rebinding window between the up-front URL validation and the actual
+// connection. Reused across connections so it stays warm.
+const safeDnsLookup = createSafeDnsLookup();
+
 const startSSRFProxy = async (): Promise<number> => {
   const server = new Server({
     port: 0,
     host: '127.0.0.1',
     prepareRequestFunction: async ({ hostname }) => {
-      if (!ALLOW_LOCAL_WEBHOOKS && (await isInternalHost(hostname))) {
-        throw new RequestError(
-          'Blocked: target resolves to a private/internal address',
-          403,
-        );
+      if (!ALLOW_LOCAL_WEBHOOKS) {
+        try {
+          await assertSafeProxyHostname(hostname);
+        } catch (error) {
+          if (error instanceof InsecureConnectionError) {
+            throw new RequestError(error.message, 403);
+          }
+          throw error;
+        }
       }
-      return { upstreamProxyUrl: buildUpstreamProxyUrl() };
+      const upstreamProxyUrl = buildUpstreamProxyUrl();
+      // When an upstream proxy is configured, the target is resolved by that
+      // proxy (out of our control), so only pin the connect-time lookup for
+      // direct connections. Attaching it unconditionally would also validate
+      // the upstream proxy's own host, which may legitimately be internal.
+      return {
+        upstreamProxyUrl,
+        ...(upstreamProxyUrl ? {} : { dnsLookup: safeDnsLookup }),
+      };
     },
   });
   await server.listen();
@@ -184,10 +206,19 @@ interface UrlModel {
   skip_tls_verification?: boolean;
 }
 
-let browser: Browser;
+let obscuraBrowser: Browser | null = null;
+let chromiumBrowser: Browser | null = null;
 
-const initializeBrowser = async () => {
-  browser = await chromium.launch({
+async function connectObscura(): Promise<Browser> {
+  if (!OBSCURA_CDP_URL) throw new Error('OBSCURA_CDP_URL not set');
+  const wsUrl = OBSCURA_CDP_SECRET
+    ? `${OBSCURA_CDP_URL}?cdp-secret=${encodeURIComponent(OBSCURA_CDP_SECRET)}`
+    : OBSCURA_CDP_URL;
+  return chromium.connectOverCDP(wsUrl);
+}
+
+async function launchChromium(): Promise<Browser> {
+  return chromium.launch({
     headless: true,
     args: [
       '--no-sandbox',
@@ -199,15 +230,82 @@ const initializeBrowser = async () => {
       '--disable-gpu',
     ],
   });
+}
+
+// Anti-bot fallback: route the request through FlareSolverr's HTTP API, which
+// drives its own headless Chrome to solve Cloudflare/Turnstile challenges. Only
+// invoked when FLARESOLVERR_URL is configured and the primary backend returns a
+// challenge status.
+async function scrapeViaFlareSolverr(
+  targetUrl: string,
+  timeout: number,
+  headers?: { [key: string]: string },
+): Promise<{ content: string; status: number; contentType?: string }> {
+  if (!FLARESOLVERR_URL) throw new Error('FLARESOLVERR_URL not set');
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeout + 10000);
+  try {
+    const resp = await fetch(FLARESOLVERR_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        cmd: 'request.get',
+        url: targetUrl,
+        maxTimeout: timeout,
+        ...(headers ? { headers } : {}),
+      }),
+      signal: controller.signal,
+    });
+    const data: any = await resp.json();
+    if (data.status !== 'ok' || !data.solution) {
+      throw new Error(data.message || 'FlareSolverr returned an error');
+    }
+    return {
+      content:
+        typeof data.solution.response === 'string' ? data.solution.response : '',
+      status:
+        typeof data.solution.status === 'number' ? data.solution.status : 200,
+      contentType: 'text/html',
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function getBrowserForScrape(): Promise<{ browser: Browser; backend: RenderBackend }> {
+  for (const backend of RENDER_BACKEND_ORDER) {
+    try {
+      if (backend === RenderBackend.OBSCURA) {
+        if (!obscuraBrowser) obscuraBrowser = await connectObscura();
+        return { browser: obscuraBrowser, backend: RenderBackend.OBSCURA };
+      }
+      if (backend === RenderBackend.CHROMIUM) {
+        if (!chromiumBrowser) chromiumBrowser = await launchChromium();
+        return { browser: chromiumBrowser, backend: RenderBackend.CHROMIUM };
+      }
+    } catch (err) {
+      console.warn(`Backend ${backend} unavailable:`, (err as Error).message);
+      continue;
+    }
+  }
+  throw new Error('No rendering backend available');
+}
+
+const initializeBrowser = async () => {
+  try {
+    const { browser, backend } = await getBrowserForScrape();
+    console.log(`Browser initialized using backend: ${backend}`);
+  } catch (err) {
+    console.error('Failed to initialize any browser backend:', (err as Error).message);
+    throw err;
+  }
 };
 
 const createContext = async (
+  browser: Browser,
   skipTlsVerification: boolean = false,
-  userAgentOverride?: string,
-): Promise<{
-  context: BrowserContext;
-  securityState: ContextSecurityState;
-}> => {
+  userAgentOverride?: string
+): Promise<{ context: BrowserContext; securityState: ContextSecurityState }> => {
   const userAgent = userAgentOverride || new UserAgent().toString();
   const viewport = { width: 1280, height: 800 };
   const securityState: ContextSecurityState = {
@@ -268,8 +366,13 @@ const createContext = async (
 };
 
 const shutdownBrowser = async () => {
-  if (browser) {
-    await browser.close();
+  if (chromiumBrowser) {
+    await chromiumBrowser.close();
+    chromiumBrowser = null;
+  }
+  if (obscuraBrowser) {
+    await obscuraBrowser.close();
+    obscuraBrowser = null;
   }
 };
 
@@ -346,17 +449,16 @@ const scrapePage = async (
 
 app.get('/health', async (req: Request, res: Response) => {
   try {
-    if (!browser) {
-      await initializeBrowser();
-    }
-
-    const { context: testContext } = await createContext();
+    const { browser, backend } = await getBrowserForScrape();
+    
+    const { context: testContext } = await createContext(browser);
     const testPage = await testContext.newPage();
     await testPage.close();
     await testContext.close();
 
     res.status(200).json({
       status: 'healthy',
+      backend,
       maxConcurrentPages: MAX_CONCURRENT_PAGES,
       activePages: MAX_CONCURRENT_PAGES - pageSemaphore.getAvailablePermits(),
     });
@@ -415,10 +517,6 @@ app.post('/scrape', async (req: Request, res: Response) => {
     );
   }
 
-  if (!browser) {
-    await initializeBrowser();
-  }
-
   await pageSemaphore.acquire();
 
   let requestContext: BrowserContext | null = null;
@@ -426,6 +524,8 @@ app.post('/scrape', async (req: Request, res: Response) => {
   let page: Page | null = null;
 
   try {
+    const { browser, backend } = await getBrowserForScrape();
+    
     // Extract user-agent from request headers (case-insensitive) so it can
     // be applied at the context level.  Playwright ignores user-agent in
     // setExtraHTTPHeaders when the context already defines one (#2802).
@@ -435,10 +535,7 @@ app.post('/scrape', async (req: Request, res: Response) => {
         )?.[1]
       : undefined;
 
-    const contextBundle = await createContext(
-      skip_tls_verification,
-      userAgentOverride,
-    );
+    const contextBundle = await createContext(browser, skip_tls_verification, userAgentOverride);
     requestContext = contextBundle.context;
     securityState = contextBundle.securityState;
     page = await requestContext.newPage();
@@ -525,19 +622,43 @@ app.post('/scrape', async (req: Request, res: Response) => {
     const pageError =
       result.status !== 200 ? getError(result.status) : undefined;
 
-    if (!pageError) {
-      console.log(`✅ Scrape successful!`);
+    let finalContent = result.content ?? '';
+    let finalStatus = result.status;
+    let finalContentType = result.contentType;
+    let finalPageError = pageError;
+
+    // Anti-bot fallback: if the primary backend returned a Cloudflare-style
+    // challenge and FlareSolverr is configured, retry through it.
+    if (
+      pageError &&
+      FLARESOLVERR_URL &&
+      result.status &&
+      [403, 429, 503].includes(result.status)
+    ) {
+      try {
+        const fsResult = await scrapeViaFlareSolverr(url, timeout, headers);
+        finalContent = fsResult.content;
+        finalStatus = fsResult.status;
+        finalContentType = fsResult.contentType;
+        finalPageError =
+          fsResult.status !== 200 ? getError(fsResult.status) : undefined;
+        console.log(`✅ Scrape succeeded via FlareSolverr fallback (backend: ${backend})`);
+      } catch (fsErr) {
+        console.warn(`⚠️ FlareSolverr fallback failed:`, (fsErr as Error).message);
+      }
+    }
+
+    if (!finalPageError) {
+      console.log(`✅ Scrape successful! (backend: ${backend})`);
     } else {
-      console.log(
-        `🚨 Scrape failed with status code: ${result.status} ${pageError}`,
-      );
+      console.log(`🚨 Scrape failed with status code: ${finalStatus} ${finalPageError} (backend: ${backend})`);
     }
 
     res.json({
-      content: result.content,
-      pageStatusCode: result.status,
-      contentType: result.contentType,
-      ...(pageError && { pageError }),
+      content: finalContent,
+      pageStatusCode: finalStatus,
+      contentType: finalContentType,
+      ...(finalPageError && { pageError: finalPageError }),
     });
   } catch (error) {
     if (error instanceof InsecureConnectionError) {

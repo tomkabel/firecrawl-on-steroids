@@ -1,0 +1,26 @@
+[package]
+name = "chaser-service"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "HTTP microservice exposing chaser-oxide as a /scrape endpoint with fingerprint randomization"
+
+[dependencies]
+chaser-oxide = { path = "../../chaser-oxide" }
+chromiumoxide_cdp = { path = "../../chaser-oxide/chromiumoxide_cdp" }
+tokio = { version = "1", features = ["full"] }
+axum = { version = "0.8", features = ["macros"] }
+futures = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+anyhow = "1"
+rand = "0.8"
+url = "2"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
