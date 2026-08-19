@@ -1,4 +1,5 @@
 import express, { Request, Response } from 'express';
+import { parseMcpSse } from './mcp';
 import helmet from 'helmet';
 import { lookup } from 'dns/promises';
 import net from 'net';
@@ -91,11 +92,6 @@ async function assertSafeTargetUrl(urlString: string): Promise<void> {
 
 // ---------- MCP JSON-RPC helper ----------
 
-interface MCPResult {
-  result?: unknown;
-  error?: { code: number; message: string; data?: unknown };
-}
-
 let mcpNextId = 0;
 // MCP SSE sessions are identified by a session id returned on initialize and
 // expected on every subsequent request.
@@ -147,21 +143,7 @@ async function mcpCall(
   const text = await res.text();
 
   // FastMCP HTTP transport returns SSE: "data: {...}\n\n" lines
-  for (const line of text.split('\n')) {
-    if (!line.startsWith('data: ')) continue;
-    const raw = line.slice(6).trim();
-    if (!raw || raw === '[DONE]') continue;
-    try {
-      const parsed = JSON.parse(raw) as MCPResult;
-      if (parsed.result !== undefined) return parsed.result;
-      if (parsed.error) throw new Error(parsed.error.message || JSON.stringify(parsed.error));
-    } catch (e) {
-      if (e instanceof SyntaxError) continue;
-      throw e;
-    }
-  }
-
-  throw new Error(`No valid result in MCP response for ${method}`);
+  return parseMcpSse(text);
 }
 
 // ---------- Session-scoped scrape ----------

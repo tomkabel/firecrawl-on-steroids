@@ -180,8 +180,14 @@ pub async fn assert_safe_target_url(url_string: &str) -> Result<(), SsrfError> {
         });
     }
 
+    // Strip RFC 5952 brackets from a literal IPv6 host before IP/DNS checks.
+    let bare = hostname
+        .strip_prefix('[')
+        .and_then(|h| h.strip_suffix(']'))
+        .unwrap_or(&hostname);
+
     // Check if hostname is already a raw IP
-    if let Ok(parsed_ip) = hostname.parse::<IpAddr>() {
+    if let Ok(parsed_ip) = bare.parse::<IpAddr>() {
         if is_ip_private(&parsed_ip) {
             return Err(SsrfError {
                 blocked_url: url_string.to_string(),
@@ -192,7 +198,7 @@ pub async fn assert_safe_target_url(url_string: &str) -> Result<(), SsrfError> {
     }
 
     // DNS resolution
-    let resolved = lookup_with_cache(&hostname).await?;
+    let resolved = lookup_with_cache(bare).await?;
 
     if resolved.is_empty() {
         return Err(SsrfError {
@@ -209,4 +215,110 @@ pub async fn assert_safe_target_url(url_string: &str) -> Result<(), SsrfError> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalize_hostname_lowercases_and_strips_trailing_dot() {
+        assert_eq!(normalize_hostname("EXAMPLE.com."), "example.com");
+        assert_eq!(normalize_hostname("Foo.Bar.Baz"), "foo.bar.baz");
+        assert_eq!(normalize_hostname("example.com"), "example.com");
+    }
+
+    #[test]
+    fn is_ip_private_ipv4() {
+        assert!(is_ip_private("10.0.0.1".parse().unwrap()));
+        assert!(is_ip_private("172.16.0.1".parse().unwrap()));
+        assert!(is_ip_private("192.168.1.1".parse().unwrap()));
+        assert!(is_ip_private("127.0.0.1".parse().unwrap()));
+        assert!(is_ip_private("169.254.0.1".parse().unwrap()));
+        assert!(!is_ip_private("8.8.8.8".parse().unwrap()));
+        assert!(!is_ip_private("203.0.113.5".parse().unwrap()));
+    }
+
+    #[test]
+    fn is_ip_private_ipv6() {
+        assert!(is_ip_private("::1".parse().unwrap()));
+        assert!(is_ip_private("fc00::1".parse().unwrap()));
+        assert!(is_ip_private("fe80::1".parse().unwrap()));
+        assert!(!is_ip_private("2001:4860:4860::8888".parse().unwrap()));
+    }
+
+    #[test]
+    fn is_local_hostname_matches_localhost_and_subdomains() {
+        assert!(is_local_hostname("localhost"));
+        assert!(is_local_hostname("a.localhost"));
+        assert!(!is_local_hostname("localhost.example.com"));
+        assert!(!is_local_hostname("example.com"));
+    }
+
+    #[test]
+    fn ipv6_range_helpers() {
+        assert!(is_ipv6_unique_local("fc00::1".parse().unwrap()));
+        assert!(is_ipv6_unique_local("fd12:3456::1".parse().unwrap()));
+        assert!(!is_ipv6_unique_local("2001:db8::1".parse().unwrap()));
+
+        assert!(is_ipv6_link_local("fe80::1".parse().unwrap()));
+        assert!(!is_ipv6_link_local("2001:db8::1".parse().unwrap()));
+    }
+
+    #[tokio::test]
+    async fn assert_safe_target_url_allows_public_raw_ip() {
+        assert!(assert_safe_target_url("https://8.8.8.8/").await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn assert_safe_target_url_blocks_private_raw_ip() {
+        let err = assert_safe_target_url("http://10.0.0.1/")
+            .await
+            .unwrap_err();
+        assert!(err.reason.contains("private IP"));
+    }
+
+    #[tokio::test]
+    async fn assert_safe_target_url_blocks_private_ipv6() {
+        let err = assert_safe_target_url("http://[::1]/")
+            .await
+            .unwrap_err();
+        assert!(err.reason.contains("private IP"));
+    }
+
+    #[tokio::test]
+    async fn assert_safe_target_url_blocks_unsupported_protocol() {
+        let err = assert_safe_target_url("ftp://example.com/")
+            .await
+            .unwrap_err();
+        assert!(err.reason.contains("unsupported protocol"));
+    }
+
+    #[tokio::test]
+    async fn assert_safe_target_url_blocks_invalid_url() {
+        let err = assert_safe_target_url("not a url").await.unwrap_err();
+        assert_eq!(err.reason, "URL is invalid");
+    }
+
+    #[tokio::test]
+    async fn assert_safe_target_url_blocks_missing_hostname() {
+        let err = assert_safe_target_url("http:///path").await.unwrap_err();
+        assert_eq!(err.reason, "hostname is missing");
+    }
+
+    #[tokio::test]
+    async fn assert_safe_target_url_blocks_localhost_by_default() {
+        let err = assert_safe_target_url("http://localhost:8080/")
+            .await
+            .unwrap_err();
+        assert!(err.reason.contains("localhost"));
+    }
+
+    #[tokio::test]
+    async fn assert_safe_target_url_allows_local_when_overridden() {
+        std::env::set_var("ALLOW_LOCAL_WEBHOOKS", "TRUE");
+        assert!(assert_safe_target_url("http://localhost:8080/").await.is_ok());
+        assert!(assert_safe_target_url("http://10.0.0.1/").await.is_ok());
+        std::env::set_var("ALLOW_LOCAL_WEBHOOKS", "False");
+    }
 }

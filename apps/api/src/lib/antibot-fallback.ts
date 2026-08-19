@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { config } from "../config";
+import { detectAntiBotFailure } from "./antibot-detection";
 import { logger } from "./logger";
 import { robustFetch } from "../scraper/scrapeURL/lib/fetch";
 
@@ -14,17 +15,6 @@ interface AntiBotBackend {
   name: string;
   url: string;
   authToken?: string;
-}
-
-// Shared failure-detection logic — previously duplicated across every backend
-// closure. A primary response is treated as a bot block when it is a 403,
-// contains a CAPTCHA/interstitial marker, or returns an empty 200 body.
-function detectAntiBotFailure(html: string, statusCode: number): boolean {
-  return (
-    statusCode === 403 ||
-    isCaptchaPage(html) ||
-    (statusCode === 200 && (html?.trim().length ?? 0) === 0)
-  );
 }
 
 function buildAntiBotBackends(): AntiBotBackend[] {
@@ -53,17 +43,6 @@ function buildAntiBotBackends(): AntiBotBackend[] {
   }
 
   return backends;
-}
-
-function isCaptchaPage(html: string): boolean {
-  if (!html) return false;
-  const indicators = [
-    "cf-challenge-running",
-    "challenge-platform",
-    "g-recaptcha",
-    "turnstile-wrapper",
-  ];
-  return indicators.some((i) => html.includes(i));
 }
 
 export async function tryAntiBotFallback(

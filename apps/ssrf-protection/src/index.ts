@@ -137,11 +137,16 @@ export const assertSafeTargetUrl = async (
     );
   }
 
-  if (IPAddr.isValid(hostname)) {
-    if (isIPPrivate(hostname)) {
+  // Strip RFC 5952 brackets from a literal IPv6 host before IP/DNS checks.
+  const bareHostname = hostname.startsWith('[') && hostname.endsWith(']')
+    ? hostname.slice(1, -1)
+    : hostname;
+
+  if (IPAddr.isValid(bareHostname)) {
+    if (isIPPrivate(bareHostname)) {
       throw new InsecureConnectionError(
         urlString,
-        `private IP "${hostname}" is not allowed`,
+        `private IP "${bareHostname}" is not allowed`,
       );
     }
     return;
@@ -149,11 +154,11 @@ export const assertSafeTargetUrl = async (
 
   let resolvedAddresses: string[];
   try {
-    resolvedAddresses = await lookupWithCache(hostname);
+    resolvedAddresses = await lookupWithCache(bareHostname);
   } catch {
     throw new InsecureConnectionError(
       urlString,
-      `DNS lookup failed for "${hostname}", cannot verify target is safe`,
+      `DNS lookup failed for "${bareHostname}", cannot verify target is safe`,
     );
   }
 

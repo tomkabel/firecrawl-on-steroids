@@ -6,7 +6,9 @@
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
-    "dev": "tsx src/index.ts"
+    "dev": "tsx src/index.ts",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "express": "^5.2.1",
@@ -16,6 +18,7 @@
     "@types/express": "^5.0.3",
     "@types/node": "^22.15.30",
     "tsx": "^4.19.4",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.9"
   }
 }
