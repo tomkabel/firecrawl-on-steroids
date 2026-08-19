@@ -220,10 +220,14 @@ pub async fn assert_safe_target_url(url_string: &str) -> Result<(), SsrfError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::LazyLock;
+    use tokio::sync::Mutex as AsyncMutex;
 
     // Serializes tests that read or mutate the process-global
     // `ALLOW_LOCAL_WEBHOOKS` env var to avoid races between parallel tests.
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
+    // A tokio Mutex is used (instead of `std::sync::Mutex`) so the guard can be
+    // safely held across `.await` points without stalling the async executor.
+    static ENV_LOCK: LazyLock<AsyncMutex<()>> = LazyLock::new(|| AsyncMutex::new(()));
 
     #[test]
     fn normalize_hostname_lowercases_and_strips_trailing_dot() {
@@ -314,7 +318,7 @@ mod tests {
     async fn assert_safe_target_url_blocks_localhost_by_default() {
         // This test depends on `ALLOW_LOCAL_WEBHOOKS` being unset/false, so it
         // must be serialized with any test that mutates the env var.
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = ENV_LOCK.lock().await;
         let err = assert_safe_target_url("http://localhost:8080/")
             .await
             .unwrap_err();
@@ -323,7 +327,7 @@ mod tests {
 
     #[tokio::test]
     async fn assert_safe_target_url_allows_local_when_overridden() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = ENV_LOCK.lock().await;
         let original = std::env::var("ALLOW_LOCAL_WEBHOOKS").ok();
         std::env::set_var("ALLOW_LOCAL_WEBHOOKS", "TRUE");
         assert!(assert_safe_target_url("http://localhost:8080/").await.is_ok());
