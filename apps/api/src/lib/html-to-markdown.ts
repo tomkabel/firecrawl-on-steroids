@@ -7,6 +7,7 @@ import type { Logger } from "winston";
 import { stat } from "fs/promises";
 import { HTML_TO_MARKDOWN_PATH } from "../natives";
 import { convertHTMLToMarkdownWithHttpService } from "./html-to-markdown-client";
+import { convertHTMLToMarkdownWithCrawl4AI } from "./crawl4ai-converter";
 import { postProcessMarkdown } from "@mendable/firecrawl-rs";
 
 // TODO: add a timeout to the Go parser
@@ -67,7 +68,18 @@ export async function parseMarkdown(
   const requestId = context?.requestId;
   const zeroDataRetention = context?.zeroDataRetention === true;
 
-  // Try HTTP service first if enabled
+  const conversionContext = {
+    logger: contextLogger,
+    requestId,
+    zeroDataRetention,
+  };
+
+  // Try the cheaper local converters FIRST so a misconfigured or degraded
+  // Crawl4AI endpoint (which can block for up to CRAWL4AI_TIMEOUT_MS) never
+  // couples latency into the common conversion path. Crawl4AI is only used as a
+  // final fallback below.
+
+  // 1) HTTP service (if enabled)
   if (config.HTML_TO_MARKDOWN_SERVICE_URL) {
     try {
       let markdownContent = await convertHTMLToMarkdownWithHttpService(html, {
@@ -91,6 +103,7 @@ export async function parseMarkdown(
     }
   }
 
+  // 2) Go parser (if enabled)
   try {
     if (config.USE_GO_MARKDOWN_PARSER) {
       const converter = await GoMarkdownConverter.getInstance();
@@ -119,7 +132,7 @@ export async function parseMarkdown(
     }
   }
 
-  // Fallback to TurndownService if Go parser fails or is not enabled
+  // 3) TurndownService (always-available local fallback)
   var TurndownService = require("turndown");
   var turndownPluginGfm = require("joplin-turndown-plugin-gfm");
 
@@ -144,12 +157,43 @@ export async function parseMarkdown(
   try {
     let markdownContent = await turndownService.turndown(html);
     markdownContent = await postProcessMarkdown(markdownContent);
-
     return markdownContent;
   } catch (error) {
-    contextLogger.error("Error converting HTML to Markdown", { error });
-    return ""; // Optionally return an empty string or handle the error as needed
+    // Don't bail out here — fall through to Crawl4AI as a last resort instead of
+    // discarding the whole conversion on a Turndown hiccup.
+    contextLogger.error(
+      "Error converting HTML to Markdown with Turndown, falling back to Crawl4AI",
+      { error },
+    );
   }
+
+  // 4) Crawl4AI (external, can be slow/unreachable) — final fallback only, so it
+  //    never adds latency to the common path. A successful-but-empty result is
+  //    still returned (not discarded) since there are no further fallbacks.
+  if (config.CRAWL4AI_URL) {
+    try {
+      const markdownContent = await convertHTMLToMarkdownWithCrawl4AI(
+        html,
+        conversionContext,
+      );
+      if (markdownContent !== null) {
+        return await postProcessMarkdown(markdownContent);
+      }
+    } catch (error) {
+      contextLogger.error(
+        "Error converting HTML to Markdown with Crawl4AI, falling back",
+        { error },
+      );
+      Sentry.captureException(error, {
+        tags: {
+          fallback: "crawl4ai",
+          ...(requestId && !zeroDataRetention ? { request_id: requestId } : {}),
+        },
+      });
+    }
+  }
+
+  return "";
 }
 
 function processMultiLineLinks(markdownContent: string): string {

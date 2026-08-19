@@ -1,0 +1,120 @@
+name: New Services Unit Tests
+
+# Unit-test suite for the new features introduced alongside PR #1
+# (ssrf-protection, stealth-bridge, chaser-service SSRF logic, and the
+# api anti-bot / crawl4ai detection helpers). Runs on every PR targeting the
+# feature branch and on pushes to it.
+
+on:
+  pull_request:
+    branches:
+      - accidental-main-9-commits-2026-07-03
+    paths:
+      - apps/ssrf-protection/**
+      - apps/stealth-bridge/**
+      - apps/chaser-service/**
+      - apps/api/src/lib/antibot-detection.ts
+      - apps/api/src/lib/antibot-fallback.ts
+      - apps/api/src/lib/crawl4ai-converter.ts
+      - apps/api/src/lib/__tests__/antibot-detection.test.ts
+      - apps/api/src/lib/__tests__/crawl4ai-converter.test.ts
+      - .github/workflows/test-new-services.yml
+  push:
+    branches:
+      - accidental-main-9-commits-2026-07-03
+    paths:
+      - apps/ssrf-protection/**
+      - apps/stealth-bridge/**
+      - apps/chaser-service/**
+      - apps/api/src/lib/antibot-detection.ts
+      - apps/api/src/lib/antibot-fallback.ts
+      - apps/api/src/lib/crawl4ai-converter.ts
+      - apps/api/src/lib/__tests__/antibot-detection.test.ts
+      - apps/api/src/lib/__tests__/crawl4ai-converter.test.ts
+      - .github/workflows/test-new-services.yml
+  workflow_dispatch:
+
+jobs:
+  ssrf-protection:
+    name: SSRF Protection (TS)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./apps/ssrf-protection
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/ssrf-protection/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      - name: Run unit tests
+        run: npx vitest run
+
+  stealth-bridge:
+    name: Stealth Bridge (TS)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./apps/stealth-bridge
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/stealth-bridge/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      - name: Run unit tests
+        run: npx vitest run
+
+  chaser-service:
+    name: Chaser Service (Rust)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            apps/chaser-service/target
+          key: ${{ runner.os }}-cargo-chaser-${{ hashFiles('apps/chaser-service/Cargo.lock', 'apps/chaser-service/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-chaser-
+      - name: Run unit tests
+        working-directory: ./apps/chaser-service
+        run: cargo test --lib ssrf
+
+  api-lib-unit:
+    name: API Lib Detection (TS)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./apps/api
+    env:
+      # Keep the unit suite hermetic: no browsers / external services.
+      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
+      PUPPETEER_SKIP_DOWNLOAD: "1"
+      USE_DB_AUTHENTICATION: "false"
+      npm_config_ignore_scripts: "true"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.16.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+          cache-dependency-path: apps/api/pnpm-lock.yaml
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+      - name: Run unit tests
+        run: pnpm vitest run src/lib/__tests__/antibot-detection.test.ts src/lib/__tests__/crawl4ai-converter.test.ts
