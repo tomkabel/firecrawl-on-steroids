@@ -21,9 +21,9 @@ jobs:
       matrix:
         include:
           - platform: linux/amd64
-            runner: blacksmith-4vcpu-ubuntu-2404
+            runner: ${{ github.repository_owner == 'firecrawl' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
           - platform: linux/arm64
-            runner: blacksmith-4vcpu-ubuntu-2404-arm
+            runner: ${{ github.repository_owner == 'firecrawl' && 'blacksmith-4vcpu-ubuntu-2404-arm' || 'ubuntu-24.04-arm' }}
     defaults:
       run:
         working-directory: './apps/nuq-postgres'
@@ -32,7 +32,7 @@ jobs:
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
 
       - name: Setup Blacksmith Builder
-        uses: useblacksmith/setup-docker-builder@ef12d5b165b596e3aa44ea8198d8fde563eab402 # v1
+        uses: docker/setup-buildx-action@v3
 
       - name: 'Login to GitHub Container Registry'
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
@@ -53,7 +53,7 @@ jobs:
           echo "PLATFORM_SUFFIX=${platform//\//-}" >> $GITHUB_ENV
 
       - name: 'Build and Push Image'
-        uses: useblacksmith/build-push-action@30c71162f16ea2c27c3e21523255d209b8b538c1 # v2
+        uses: docker/build-push-action@v6
         with:
           context: ./apps/nuq-postgres
           push: true
@@ -62,7 +62,7 @@ jobs:
           provenance: false
 
   manifest:
-    runs-on: blacksmith-2vcpu-ubuntu-2404
+    runs-on: ${{ github.repository_owner == 'firecrawl' && 'blacksmith-2vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
     needs: build
     environment: ghcr-publish
     permissions:

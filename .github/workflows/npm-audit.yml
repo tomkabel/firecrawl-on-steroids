@@ -10,7 +10,7 @@ on:
 
 jobs:
   audit:
-    runs-on: blacksmith-2vcpu-ubuntu-2404
+    runs-on: ${{ github.repository_owner == 'firecrawl' && 'blacksmith-2vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
     steps:
       - uses: actions/checkout@v5
       - name: Install Node.js

@@ -34,7 +34,7 @@ jobs:
         # proxy: ["proxy", "no-proxy"]
         # search: ["searxng", "google"]
         # ai: ["openai", "no-ai"]
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ${{ github.repository_owner == 'firecrawl' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
     services:
       redis:
         image: redis
@@ -578,7 +578,7 @@ jobs:
 
   nuq-fdb-core:
     name: NuQ FoundationDB core tests
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ${{ github.repository_owner == 'firecrawl' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
     env:
       FDB_VERSION: 7.3.63
     steps:

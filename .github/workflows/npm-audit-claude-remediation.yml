@@ -21,7 +21,7 @@ concurrency:
 jobs:
   remediate:
     if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'failure' }}
-    runs-on: blacksmith-2vcpu-ubuntu-2404
+    runs-on: ${{ github.repository_owner == 'firecrawl' && 'blacksmith-2vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
     timeout-minutes: 60
     env:
       NPM_AUDIT_CLAUDE_SLACK_WEBHOOK_URL: ${{ secrets.NPM_AUDIT_CLAUDE_SLACK_WEBHOOK_URL }}

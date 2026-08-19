@@ -13,7 +13,7 @@ on:
 
 jobs:
       push-app-image:
-        runs-on: blacksmith-4vcpu-ubuntu-2404
+        runs-on: ${{ github.repository_owner == 'firecrawl' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
         defaults:
           run:
             working-directory: './apps/redis'
