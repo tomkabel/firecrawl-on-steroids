@@ -128,7 +128,7 @@ jobs:
             apps/api/native/index.d.ts
           key: ${{ steps.napi_restore.outputs.cache-primary-key }}
 
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v7
         with:
           go-version: 1.24
           cache-dependency-path: apps/api/sharedLibs/go-html-to-md/go.sum
@@ -516,7 +516,7 @@ jobs:
   #           apps/api/native/index.d.ts
   #         key: ${{ steps.napi_restore.outputs.cache-primary-key }}
 
-  #     - uses: actions/setup-go@v6
+  #     - uses: actions/setup-go@v7
   #       with:
   #         go-version: 1.24
   #         cache-dependency-path: apps/api/sharedLibs/go-html-to-md/go.sum
